@@ -1,144 +1,151 @@
 # Git Repo Organizer
 
-A full‑stack platform to analyze and organize Git repositories with AI assistance. The backend is a FastAPI application backed by PostgreSQL, with Temporal for orchestration of long‑running tasks. The frontend is a Next.js application that provides a dashboard and repository pages. The project includes Docker Compose orchestration to run the backend, frontend, PostgreSQL, and Temporal server together.
-
----
+A full stack monorepo that orchestrates git repository analysis and organization using AI driven workflows. The backend is a Python FastAPI application with Temporal workflows and PostgreSQL, while the frontend is a Next.js (TypeScript) application. The project integrates with GitHub and AI services to analyze repositories and perform coordination through Temporal.
 
 ## Architecture Overview
 
 ```mermaid
 graph TD
-  Backend[Backend]
-  Frontend[Frontend]
-  Temporal[Temporal Server]
-  Database[PostgreSQL Database]
-  DockerCompose[docker-compose.yml]
-  BackendMain[backend main.py]
-  BackendPy[backend pyproject.toml]
-  AlembicIni[backend alembic ini]
-  BackendDocker[backend Dockerfile]
-  FrontendDocker[frontend Dockerfile]
-  FrontendNextConfig[frontend next.config.ts]
-  FrontendPkg[frontend package.json]
-  TemporalWorker[backend temporal worker]
+Root[Root Directory]
+BackendBackend[Backend]
+FrontendFrontend[Frontend]
+ScriptsScripts[Scripts]
+DocsDocs[Documentation]
+DockerComposeFile[Docker Compose]
 
-  DockerCompose --> Backend
-  DockerCompose --> Frontend
-  DockerCompose --> Temporal
-  DockerCompose --> Database
-  Backend --> Database
-  Temporal --> Database
-  Frontend --> Backend
-  BackendMain --> Backend
-  BackendPy --> Backend
-  AlembicIni --> Backend
-  BackendDocker --> Backend
-  FrontendDocker --> Frontend
-  FrontendNextConfig --> Frontend
-  FrontendPkg --> Frontend
-  TemporalWorker --> Temporal
+Root --> BackendBackend
+Root --> FrontendFrontend
+Root --> ScriptsScripts
+Root --> DockerComposeFile
+Root --> DocsDocs
+
+BackendBackendMain[Backend Core Files]
+BackendBackendDocker[Backend Dockerfile]
+BackendBackendPyproj[Backend Pyproject Toml]
+BackendAlembicDir[Alembic Directory]
+BackendTemporalDir[Temporal Components]
+BackendApiRoutes[Api Routes]
+BackendModels[Database Models]
+BackendSchemas[Schemas]
+BackendServices[GitHub and LLM Services]
+BackendTests[Tests and Utilities]
+
+FrontendFrontendMain[Frontend Core Files]
+FrontendFrontendDocker[Frontend Dockerfile]
+FrontendPackageJson[Frontend Package Json]
+FrontendNextConfig[Next Config]
+FrontendPublic[Public Assets]
+FrontendSrc[Frontend Source]
+
+BackendBackend --> BackendBackendMain
+BackendBackend --> BackendBackendDocker
+BackendBackend --> BackendBackendPyproj
+BackendBackend --> BackendAlembicDir
+BackendBackend --> BackendTemporalDir
+BackendBackend --> BackendApiRoutes
+BackendBackend --> BackendModels
+BackendBackend --> BackendSchemas
+BackendBackend --> BackendServices
+BackendBackend --> BackendTests
+
+FrontendFrontendMain --> FrontendFrontendDocker
+FrontendFrontendMain --> FrontendPackageJson
+FrontendFrontendMain --> FrontendNextConfig
+FrontendFrontendMain --> FrontendPublic
+FrontendFrontendMain --> FrontendSrc
+FrontendFrontendMain --> FrontendPublic
+
+DockerComposeFile
 ```
-
-- Top level components: Backend, Frontend, Temporal Server, PostgreSQL Database
-- Key config and entry points: backend/main.py, backend/pyproject.toml, backend/alembic.ini
-- Docker artifacts: backend/Dockerfile and frontend/Dockerfile
-- Frontend config: frontend/next.config.ts and frontend/package.json
-- Orchestration: docker-compose.yml that wires all services together
-
----
 
 ## Tech Stack
 
 - Languages
   - Python
-  - TypeScript / JavaScript
-- Backend
+  - TypeScript (Frontend)
+  - SQL
+
+- Backend Frameworks / Tools
   - FastAPI
-  - SQLAlchemy (ORM)
-  - Alembic (migrations)
-  - Pydantic
-  - Temporal Python SDK (for workers and workflows)
-- Frontend
-  - Next.js (React) with TypeScript
-- Databases / Storage
-  - PostgreSQL (PostgreSQL 16 Alpine in Docker)
-- Infrastructure / Tools
+  - SQLAlchemy
+  - Alembic
+  - Temporal
+  - PostgreSQL
+  - Uvicorn (likely via FastAPI deployment)
+
+- Frontend Frameworks / Tools
+  - Next.js
+  - React
+  - TypeScript
+  - PNPM (workspace tooling)
+  - PostCSS (config present)
+
+- Infrastructure / DevOps
   - Docker
   - Docker Compose
-  - PNPM (frontend package management)
-- AI / Integrations
-  - LLM integration (LLM service in backend)
-  - GitHub related services (github_service.py, github.py)
-- Project configuration
-  - pyproject.toml (Python tooling)
-  - pnpm-workspace.yaml and pnpm-lock.yaml (frontend workspace)
-  - ESLint, PostCSS, and Next.js tooling (frontend)
+  - Temporal UI
+  - PostgreSQL (via Docker Compose)
 
----
+- Integrations
+  - GitHub API (github_service)
+  - Large Language Model tooling (llm_service)
 
 ## Getting Started / How to Run
 
-The project is configured to run using Docker Compose. The docker-compose.yml file defines services for PostgreSQL, Temporal server, the backend (FastAPI), a Temporal worker, and the frontend (Next.js).
+Prerequisites
+- Docker and Docker Compose installed
+- Optional but recommended: .env file for backend; contains PostgreSQL credentials if you want to customize defaults
 
-Prerequisites:
-- Docker
-- Docker Compose
+What’s supported by this repo (per the config)
+- The app is designed to be run via Docker Compose with multiple services: backend, frontend, postgres, Temporal, and Temporal UI
+- Frontend is built with build args for Next.js; provide values for NEXT_PUBLIC_GITHUB_CLIENT_ID and NEXT_PUBLIC_API_BASE_URL during build if you customize
+- Backend relies on a Postgres database; a persistent volume is defined
 
-Run the full stack:
-- From the repository root:
-  - docker-compose up --build
+Quick Start
+1) From the repo root, start the full stack
+- Command:
+  docker compose up --build
 
-This will start:
-- PostgreSQL database
-- Temporal server
-- Backend API (FastAPI) available at http://localhost:8000
-- Temporal worker
-- Frontend (Next.js) available at http://localhost:3000
+2) Access the services
+- Backend API: http://localhost:8000
+- Temporal UI: http://localhost:8233
+- Frontend: http://localhost:3000
 
-Optional:
-- To run just the backend and skip frontend:
-  - docker-compose up --build backend
-- To run only the Temporal worker separately:
-  - docker-compose up --build worker
-  - Or start it explicitly: docker-compose run --rm worker
+3) Stop the stack
+- Command:
+  docker compose down
 
-Shut down:
-- docker-compose down
+Optional: Run individual services (if you want to start only certain parts)
+- Start only backend and its dependencies (postgres, temporal)
+  docker compose up --build backend postgres temporal
 
-Notes:
-- The docker-compose.yml references a .env file for environment variables. If you need to customize credentials, you can provide them in a .env file or override via environment variables when starting the services.
-- The PostgreSQL container uses default environment values in the compose (gardener / gardener_secret / gardener) unless overridden.
+Environment notes
+- The docker-compose.yml uses an env_file (.env) for some services; you can provide credentials there. If not provided, defaults defined in the compose file will be used (for example Postgres user gardener and a gardener_secret password).
+- Backend and worker are configured to connect to the Postgres service using DATABASE_URL syntax. Temporal is wired to connect as well.
+- The frontend build uses build args NEXT_PUBLIC_GITHUB_CLIENT_ID and NEXT_PUBLIC_API_BASE_URL; you can supply these values when building the frontend image via the docker-compose build phase or by providing a .env and extending the compose file accordingly.
 
----
+File references you might customize
+- backend/.env (via docker-compose env_file) for Postgres credentials
+- frontend build args for NEXT_PUBLIC_GITHUB_CLIENT_ID and NEXT_PUBLIC_API_BASE_URL
+
+Note: The repository includes a docker-compose.yml at the root which ties together postgres, temporal, temporal-ui, backend, worker, and frontend services. The architecture diagram and deployment steps above align with those services.
 
 ## Project Structure
 
 - backend/
+  - alembic/ (database migrations)
+    - versions/001_initial.py
+  - anti-gravity did this/ (documentation)
+    - testing_guide.md
   - app/
-    - api/
-      - routes.py
-    - core/
-      - config.py
-    - db/
-      - crud.py
-      - models.py
-      - session.py
-    - schemas/
-      - analysis.py
-      - github.py
-    - services/
-      - github_service.py
-      - llm_service.py
-    - temporal/
-      - activities.py
-      - worker.py
-      - workflows.py
+    - api/ (routes and API)
+    - core/ (config and core utilities)
+    - db/ (crud, models, session)
+    - schemas/ (data models for analysis and github)
+    - services/ (github_service, llm_service)
+    - temporal/ (activities, worker, workflows)
     - __init__.py
     - main.py
-  - alembic/
-    - versions/ (001_initial.py)
-    - env.py
-    - script.py.mako
   - alembic.ini
   - Dockerfile
   - main.py
@@ -146,28 +153,18 @@ Notes:
   - README.md
   - uv.lock
 - frontend/
-  - public/
-    - Various svg assets
+  - public/ (static assets)
   - src/
-    - app/
-      - callback/page.tsx
-      - dashboard/page.tsx
-      - login/page.tsx
-      - repo/[repoId]/page.tsx
-      - favicon.ico
-      - globals.css
-      - layout.tsx
-      - page.tsx
-    - components/
-      - providers.tsx
-    - hooks/
-      - use-gardener.ts
-    - lib/
-      - utils.ts
-    - services/
-      - api.ts
-    - types/
-      - api.ts
+    - app/ (callback, dashboard, login, repo pages)
+    - favicon.ico
+    - globals.css
+    - layout.tsx
+    - page.tsx
+    - components/ (providers)
+    - hooks/ (use-gardener)
+    - lib/ (utils)
+    - services/ (api)
+    - types/ (api)
   - Dockerfile
   - eslint.config.mjs
   - next.config.ts
@@ -179,27 +176,32 @@ Notes:
   - tsconfig.json
 - scripts/
   - system_check.py
-- docker-compose.yml
-- BACKEND_ARCHITECTURE.md
-- FRONTEND_ARCHITECTURE.md
-- prompt_phase10_final_fix.md
+- ROOT
+  - BACKEND_ARCHITECTURE.md
+  - FRONTEND_ARCHITECTURE.md
+  - prompt_phase10_final_fix.md
+  - README.md
+  - docker-compose.yml
 
----
+Key notes
+- The backend houses a FastAPI app with Alembic migrations and Temporal integration for asynchronous workflows.
+- The frontend is a Next.js TypeScript application with a structured pages and components layout.
+- Temporal components (activities, worker, workflows) coordinate long-running tasks like repository analysis and GitHub interactions.
 
 ## Contributing
 
-Contributions are welcome. To contribute:
+Contributions are welcome. Please follow these guidelines:
 
-- Fork the repository and create a feature branch.
-- Write tests or add validation where applicable.
-- Ensure code passes linting and type checks.
-- Open a pull request with a concise description of the changes.
+- Fork the repository and create a feature branch
+- Ensure code is properly formatted and documented
+- Add tests or update existing tests where applicable
+- Run the project locally with Docker Compose to verify changes
+- Open a Pull Request with a clear description of the change and its impact
 
-If you’re unsure how to start, look at:
-- backend/ for API, data models, and Temporal workflows
-- frontend/ for UI components and API integration
-- docker-compose.yml for local development setup
+Development and contribution guidelines
+- Ensure you run docker compose up --build to test changes in an environment that mirrors production
+- If you modify backend APIs, update or add tests under the backend tests structure
+- If you modify frontend components, update or add relevant UI tests and verify TypeScript types
+- Document any new environment variables or configuration needs in the README
 
----
-
-If you’d like, I can tailor the README further with more details from the actual config files or add example environment variables for the .env file.
+Enjoy building and extending the Git Repo Organizer!
