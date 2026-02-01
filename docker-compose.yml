@@ -29,10 +29,23 @@ services:
       POSTGRES_SEEDS: postgres
     ports:
       - "7233:7233"
-      - "8233:8080"
     depends_on:
       postgres:
         condition: service_healthy
+    networks:
+      - gardener-network
+
+  # ── Temporal UI ─────────────────────────────────
+  temporal-ui:
+    image: temporalio/ui:latest
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_CORS_ORIGINS: http://localhost:3000
+    ports:
+      - "8233:8080"
+    depends_on:
+      temporal:
+        condition: service_started
     networks:
       - gardener-network
 

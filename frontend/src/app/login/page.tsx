@@ -1,5 +1,4 @@
 "use client";
-
 import { Github } from "lucide-react";
 
 export default function LoginPage() {
@@ -15,13 +14,15 @@ export default function LoginPage() {
         <div className="flex min-h-screen flex-col items-center justify-center bg-gray-50 dark:bg-black">
             <div className="w-full max-w-md space-y-8 rounded-2xl bg-white p-10 shadow-xl dark:bg-zinc-900">
                 <div className="text-center">
-                    <h2 className="mt-2 text-3xl font-bold tracking-tight text-gray-900 dark:text-gray-50">
+                    <h2 className="mt-2 text-4xl font-bold tracking-tight text-gray-900 dark:text-gray-50">
                         Welcome Gardener
                     </h2>
+
                     <p className="mt-2 text-sm text-gray-600 dark:text-gray-400">
-                        Sign in to access Mission Control
+                        Sign in to access Github Gardener
                     </p>
                 </div>
+
 
                 <button
                     onClick={handleLogin}
@@ -31,6 +32,9 @@ export default function LoginPage() {
                     Connect with GitHub
                 </button>
             </div>
+
+
+
         </div>
     );
 }

@@ -106,15 +106,41 @@ export function useGardener() {
     const triggerFix = useMutation({
         mutationFn: async (repoId: number) => {
             const { data } = await gardenApi.triggerFix(repoId);
-            return { repoId, workflowId: data.workflow_id };
+
+            // Poll DB for pending_fix_url
+            let foundUrl: string | null = null;
+            let attempts = 0;
+            const maxAttempts = 60; // 60 seconds
+
+            while (!foundUrl && attempts < maxAttempts) {
+                await new Promise((r) => setTimeout(r, 1000));
+                attempts++;
+                try {
+                    // Fetch all repos to check if this specific repo has the update
+                    const res = await gardenApi.getRepos();
+                    const repos = Array.isArray(res.data) ? res.data : [];
+                    const updatedRepo = repos.find((r) => r.id === repoId);
+
+                    if (updatedRepo?.health?.pending_fix_url) {
+                        foundUrl = updatedRepo.health.pending_fix_url;
+                        break;
+                    }
+                } catch (e) {
+                    console.error("Polling error", e);
+                }
+            }
+
+            if (!foundUrl) throw new Error("Janitor timeout: PR URL not found after 60s");
+
+            return { repoId, workflowId: data.workflow_id, prUrl: foundUrl };
         },
         onMutate: (repoId) => {
             setFixStatus((prev) => ({ ...prev, [repoId]: "pending" }));
         },
-        onSuccess: ({ repoId }) => {
+        onSuccess: ({ repoId, prUrl }) => {
             setFixStatus((prev) => ({ ...prev, [repoId]: "done" }));
-            // Optimistic update: mark repo as having a pending fix so the
-            // View PR button renders immediately without waiting for refetch
+
+            // Update cache with the confirmed URL
             queryClient.setQueryData<Repo[]>(["repos"], (old) => {
                 if (!old) return [];
                 return old.map((repo) => {
@@ -123,15 +149,13 @@ export function useGardener() {
                             ...repo,
                             health: {
                                 ...repo.health,
-                                pending_fix_url: `${repo.html_url}/pulls`,
+                                pending_fix_url: prUrl,
                             },
                         };
                     }
                     return repo;
                 });
             });
-            // Background refetch to get the real PR URL from the DB
-            setTimeout(() => queryClient.invalidateQueries({ queryKey: ["repos"] }), 10_000);
         },
         onError: (_err, repoId) => {
             setFixStatus((prev) => {
