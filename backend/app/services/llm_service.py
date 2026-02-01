@@ -24,6 +24,8 @@ DEEP_SYSTEM_PROMPT = (
     "Do NOT guess — only document what the config files actually support.\n"
     "5. **Project Structure** — brief description of key directories.\n"
     "6. **Contributing** — standard contribution guidelines.\n\n"
+    "STRICT RULE: Do not use parentheses '()' or brackets '[]' inside Mermaid node labels. "
+    "Use simple text only (e.g., A[Frontend Service] instead of A[Frontend (Service)]).\n"
     "Only output the Markdown content, nothing else."
 )
 

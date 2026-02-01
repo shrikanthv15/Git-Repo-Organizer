@@ -29,7 +29,7 @@ services:
       POSTGRES_SEEDS: postgres
     ports:
       - "7233:7233"
-      - "8233:8233"
+      - "8233:8080"
     depends_on:
       postgres:
         condition: service_healthy

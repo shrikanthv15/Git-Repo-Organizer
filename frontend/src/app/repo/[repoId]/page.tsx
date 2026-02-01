@@ -379,8 +379,8 @@ function ActionPanel({
         );
     }
 
-    // Healthy
-    if (score !== null && score >= 80) {
+    // Perfect score — no action needed
+    if (score !== null && score >= 100) {
         return (
             <div className="space-y-4">
                 <div className="flex items-center gap-3 rounded-lg bg-green-50 p-4 dark:bg-green-900/15">
@@ -398,8 +398,8 @@ function ActionPanel({
         );
     }
 
-    // Low score -> offer auto-fix
-    if (score !== null && score < 80) {
+    // Score < 100 -> offer auto-fix
+    if (score !== null && score < 100) {
         return (
             <div className="space-y-4">
                 <div className="flex items-center gap-3 rounded-lg bg-red-50 p-4 dark:bg-red-900/15">

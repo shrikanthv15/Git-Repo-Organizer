@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from temporalio import workflow
+from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
     from app.temporal.activities import (
@@ -141,7 +142,7 @@ class JanitorWorkflow:
             deep_scan_repo,
             args=[repo_url, input.access_token, input.github_repo_id],
             start_to_close_timeout=timedelta(minutes=5),
-            retry_policy=workflow.RetryPolicy(
+            retry_policy=RetryPolicy(
                 maximum_attempts=3,
                 initial_interval=timedelta(seconds=5),
             ),
