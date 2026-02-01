@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cd:*)",
+      "Bash(tree:*)",
+      "Bash(npx next build)",
+      "Bash(python:*)",
+      "Bash(uv lock:*)"
+    ]
+  }
+}

@@ -1,0 +1,96 @@
+services:
+  # ── PostgreSQL ──────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-gardener}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-gardener_secret}
+      POSTGRES_DB: ${POSTGRES_DB:-gardener}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-gardener}" ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - gardener-network
+
+  # ── Temporal Server ─────────────────────────────
+  temporal:
+    image: temporalio/auto-setup:latest
+    environment:
+      DB: postgres12
+      DB_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-gardener}
+      POSTGRES_PWD: ${POSTGRES_PASSWORD:-gardener_secret}
+      POSTGRES_SEEDS: postgres
+    ports:
+      - "7233:7233"
+      - "8233:8233"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - gardener-network
+
+  # ── Backend (FastAPI) ───────────────────────────
+  backend:
+    build:
+      context: ./backend
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-gardener}:${POSTGRES_PASSWORD:-gardener_secret}@postgres:5432/${POSTGRES_DB:-gardener}
+      TEMPORAL_ADDRESS: temporal:7233
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      temporal:
+        condition: service_started
+    networks:
+      - gardener-network
+
+  # ── Temporal Worker ─────────────────────────────
+  worker:
+    build:
+      context: ./backend
+    command: python -m app.temporal.worker
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-gardener}:${POSTGRES_PASSWORD:-gardener_secret}@postgres:5432/${POSTGRES_DB:-gardener}
+      TEMPORAL_ADDRESS: temporal:7233
+    depends_on:
+      postgres:
+        condition: service_healthy
+      temporal:
+        condition: service_started
+    networks:
+      - gardener-network
+
+  # ── Frontend (Next.js) ──────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_GITHUB_CLIENT_ID: ${NEXT_PUBLIC_GITHUB_CLIENT_ID}
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL}
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    networks:
+      - gardener-network
+
+volumes:
+  pgdata:
+
+
+networks:
+  gardener-network:
+    driver: bridge

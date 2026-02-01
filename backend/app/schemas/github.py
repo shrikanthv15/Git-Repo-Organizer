@@ -1,4 +1,8 @@
+from __future__ import annotations
+
 from pydantic import BaseModel
+
+from app.schemas.analysis import RepoHealth
 
 
 class Repo(BaseModel):
@@ -8,6 +12,7 @@ class Repo(BaseModel):
     private: bool
     html_url: str
     description: str | None = None
+    health: RepoHealth | None = None
 
 
 class AuthExchangeRequest(BaseModel):

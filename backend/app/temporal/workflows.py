@@ -8,7 +8,9 @@ with workflow.unsafe.imports_passed_through():
     from app.temporal.activities import (
         analyze_repo_health,
         create_pull_request_activity,
+        deep_scan_repo,
         fetch_repo_list_activity,
+        generate_deep_readme_activity,
         generate_readme_activity,
         get_repo_context_activity,
         say_hello,
@@ -125,27 +127,39 @@ class JanitorInput:
     repo_full_name: str
     access_token: str
     description: str = ""
+    github_repo_id: int = 0
 
 
 @workflow.defn
 class JanitorWorkflow:
     @workflow.run
     async def run(self, input: JanitorInput) -> dict:
-        # Step 1: Read — get the file tree
-        file_structure = await workflow.execute_activity(
-            get_repo_context_activity,
-            args=[input.repo_full_name, input.access_token],
-            start_to_close_timeout=timedelta(seconds=30),
+        repo_url = f"https://github.com/{input.repo_full_name}"
+
+        # Step 1: Deep Scan — clone repo, map files, read key configs
+        scan_result = await workflow.execute_activity(
+            deep_scan_repo,
+            args=[repo_url, input.access_token, input.github_repo_id],
+            start_to_close_timeout=timedelta(minutes=5),
+            retry_policy=workflow.RetryPolicy(
+                maximum_attempts=3,
+                initial_interval=timedelta(seconds=5),
+            ),
         )
 
-        # Step 2: Think — generate README via LLM
+        # Step 2: Draft — generate README via LLM with deep context
         readme_content = await workflow.execute_activity(
-            generate_readme_activity,
-            args=[input.repo_full_name, file_structure, input.description],
-            start_to_close_timeout=timedelta(seconds=60),
+            generate_deep_readme_activity,
+            args=[
+                input.repo_full_name,
+                input.description,
+                scan_result["file_tree"],
+                scan_result["tech_stack_files"],
+            ],
+            start_to_close_timeout=timedelta(seconds=120),
         )
 
-        # Step 3: Act — create branch, commit, and open PR
+        # Step 3: Commit — create/force-push branch and open PR
         pr_url = await workflow.execute_activity(
             create_pull_request_activity,
             args=[input.repo_full_name, readme_content, input.access_token],

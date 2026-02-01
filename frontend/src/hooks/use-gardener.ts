@@ -1,12 +1,60 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { gardenApi } from "@/services/api";
-import { RepoHealth, BatchStatus } from "@/types/api";
+import type { Repo, BatchStatus } from "@/types/api";
 
+// -------------------------------------------------------------------
+// useHealthCheck — connectivity probe
+// -------------------------------------------------------------------
+export function useHealthCheck() {
+    return useQuery({
+        queryKey: ["health"],
+        queryFn: async () => {
+            const { data } = await gardenApi.checkHealth();
+            return data;
+        },
+        retry: 1,
+        refetchOnWindowFocus: false,
+    });
+}
+
+// -------------------------------------------------------------------
+// useRepos — replaces the old lib/use-repos.ts (no mock data)
+// -------------------------------------------------------------------
+export function useRepos() {
+    return useQuery({
+        queryKey: ["repos"],
+        queryFn: async (): Promise<Repo[]> => {
+            const { data } = await gardenApi.getRepos();
+            return Array.isArray(data) ? data : [];
+        },
+    });
+}
+
+// -------------------------------------------------------------------
+// useRepo — single repo lookup from the repos cache
+// -------------------------------------------------------------------
+export function useRepo(repoId: number) {
+    return useQuery({
+        queryKey: ["repos"],
+        queryFn: async (): Promise<Repo[]> => {
+            const { data } = await gardenApi.getRepos();
+            return Array.isArray(data) ? data : [];
+        },
+        select: (repos) => repos.find((r) => r.id === repoId) ?? null,
+    });
+}
+
+// -------------------------------------------------------------------
+// useGardener — batch analysis, single analysis, janitor fix
+// -------------------------------------------------------------------
 export function useGardener() {
     const queryClient = useQueryClient();
     const [currentWorkflowId, setCurrentWorkflowId] = useState<string | null>(null);
     const [isBatchComplete, setIsBatchComplete] = useState(false);
+
+    // Track per-repo fix status: repoId -> "pending" | "done"
+    const [fixStatus, setFixStatus] = useState<Record<number, "pending" | "done">>({});
 
     // Start Batch Mutation
     const startBatch = useMutation({
@@ -20,58 +68,102 @@ export function useGardener() {
         },
     });
 
-    // Polling Query
+    // Polling Query for batch status
     const { data: batchStatus } = useQuery({
         queryKey: ["batchStatus", currentWorkflowId],
-        queryFn: async () => {
+        queryFn: async (): Promise<BatchStatus | null> => {
             if (!currentWorkflowId) return null;
             const { data } = await gardenApi.getBatchStatus(currentWorkflowId);
             return data;
         },
         enabled: !!currentWorkflowId && !isBatchComplete,
-        refetchInterval: 2000, // Poll every 2 seconds
+        refetchInterval: 2000,
     });
 
-    // Effect to merge results
+    // Merge batch results into the repos cache
     useEffect(() => {
-        if (batchStatus) {
-            if (batchStatus.completed === batchStatus.total && batchStatus.total > 0) {
-                setIsBatchComplete(true);
-                setCurrentWorkflowId(null); // Stop polling
-            }
+        if (!batchStatus) return;
 
-            // Merge results into Repos Cache if we have completed items
-            if (batchStatus.results && batchStatus.results.length > 0) {
-                queryClient.setQueryData<any>(["repos"], (oldRepos: any[]) => {
-                    if (!oldRepos) return oldRepos;
-                    return oldRepos.map((repo) => {
-                        const healthUpdate = batchStatus.results.find(
-                            (r) => r.repo_name === repo.name
-                        );
-                        return healthUpdate ? { ...repo, health: healthUpdate } : repo;
-                    });
+        if (batchStatus.completed === batchStatus.total && batchStatus.total > 0) {
+            setIsBatchComplete(true);
+            setCurrentWorkflowId(null);
+        }
+
+        if (batchStatus.results?.length > 0) {
+            queryClient.setQueryData<Repo[]>(["repos"], (oldRepos) => {
+                if (!oldRepos) return oldRepos;
+                return oldRepos.map((repo) => {
+                    const healthUpdate = batchStatus.results.find(
+                        (r) => r.repo_name === repo.name || r.repo_name === repo.full_name,
+                    );
+                    return healthUpdate ? { ...repo, health: healthUpdate } : repo;
                 });
-            }
+            });
         }
     }, [batchStatus, queryClient]);
 
-    // Fix Mutation
+    // Fix Mutation (Janitor)
     const triggerFix = useMutation({
         mutationFn: async (repoId: number) => {
-            return gardenApi.triggerFix(repoId);
+            const { data } = await gardenApi.triggerFix(repoId);
+            return { repoId, workflowId: data.workflow_id };
+        },
+        onMutate: (repoId) => {
+            setFixStatus((prev) => ({ ...prev, [repoId]: "pending" }));
+        },
+        onSuccess: ({ repoId }) => {
+            setFixStatus((prev) => ({ ...prev, [repoId]: "done" }));
+        },
+        onError: (_err, repoId) => {
+            setFixStatus((prev) => {
+                const next = { ...prev };
+                delete next[repoId];
+                return next;
+            });
         },
     });
 
     // Single Analysis Mutation
     const triggerSingleAnalysis = useMutation({
         mutationFn: async (repoId: number) => {
-            return gardenApi.triggerAnalysis(repoId);
+            const { data } = await gardenApi.triggerAnalysis(repoId);
+            // Poll for result
+            let result = null;
+            let attempts = 0;
+            while (!result && attempts < 30) {
+                await new Promise((r) => setTimeout(r, 1000));
+                attempts++;
+                try {
+                    const status = await gardenApi.getBatchStatus(data.workflow_id);
+                    if (status.data.results && status.data.results.length > 0) {
+                        result = status.data.results[0];
+                        break;
+                    }
+                } catch (e) {
+                    console.error("Polling error", e);
+                }
+            }
+            if (!result) throw new Error("Analysis timeout");
+            return { repoId, health: result };
         },
-        onSuccess: () => {
-            // Invalidate repos to refresh health status
-            queryClient.invalidateQueries({ queryKey: ["repos"] });
-        }
+        onSuccess: ({ repoId, health }) => {
+            // MANUAL CACHE UPDATE (Do not refetch from server)
+            queryClient.setQueryData<Repo[]>(["repos"], (old) => {
+                if (!old) return [];
+                return old.map((repo) => {
+                    if (repo.id === repoId) {
+                        return { ...repo, health: health };
+                    }
+                    return repo;
+                });
+            });
+        },
     });
+
+    const getFixStatus = useCallback(
+        (repoId: number) => fixStatus[repoId] ?? null,
+        [fixStatus],
+    );
 
     return {
         startBatch,
@@ -79,5 +171,6 @@ export function useGardener() {
         triggerSingleAnalysis,
         batchStatus,
         isPolling: !!currentWorkflowId && !isBatchComplete,
+        getFixStatus,
     };
 }

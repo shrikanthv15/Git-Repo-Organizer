@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     LITELLM_API_KEY: str = "sk-l5ZNnzwyHAcQGb8yLSvaxA"
     LLM_MODEL: str = "gpt-5-nano"
     LITELLM_API_BASE: str | None = "https://litellm.confersolutions.ai/v1"
+    DATABASE_URL: str = "postgresql://gardener:gardener_secret@localhost:5432/gardener"
+    TEMPORAL_ADDRESS: str = "localhost:7233"
 
 
 settings = Settings()

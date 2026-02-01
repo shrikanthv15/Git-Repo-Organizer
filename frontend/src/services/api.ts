@@ -1,26 +1,29 @@
 import axios from "axios";
-import { BatchStatus } from "@/types/api";
+import type {
+    AuthExchangeResponse,
+    BatchStatus,
+    HealthCheckResponse,
+    Repo,
+    WorkflowResponse,
+} from "@/types/api";
 
-// Create Axios instance singleton
-// Helper to ensure /api suffix
+// Base URL: always targets the Backend's /api prefix
 const getBaseUrl = () => {
-    const url = process.env.NEXT_PUBLIC_API_BASE_URL || "";
-    const finalUrl = url.endsWith("/api") ? url : `${url}/api`;
-    console.log("[API] Base URL initialized:", finalUrl);
-    return finalUrl;
+    const url = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
+    return url.endsWith("/api") ? url : `${url}/api`;
 };
 
-// Create Axios instance singleton
+// Axios singleton
 export const api = axios.create({
     baseURL: getBaseUrl(),
     headers: {
         "Content-Type": "application/json",
         "ngrok-skip-browser-warning": "true",
     },
-    timeout: 10000,
+    timeout: 30000,
 });
 
-// Request Interceptor: Inject Token
+// Request Interceptor: Inject Bearer token
 api.interceptors.request.use(
     (config) => {
         if (typeof window !== "undefined") {
@@ -31,40 +34,48 @@ api.interceptors.request.use(
         }
         return config;
     },
-    (error) => Promise.reject(error)
+    (error) => Promise.reject(error),
 );
 
-// Response Interceptor: Handle 401 & HTML Warnings
+// Response Interceptor: Handle 401 -> redirect to login
 api.interceptors.response.use(
-    (response) => {
-        const contentType = response.headers["content-type"];
-        if (contentType && contentType.includes("text/html")) {
-            console.warn("[API] Received HTML from Backend. Possible Auth or Ngrok issue.");
-        }
-        return response;
-    },
+    (response) => response,
     (error) => {
-        if (error.response && error.response.status === 401) {
-            if (typeof window !== "undefined") {
-                localStorage.removeItem("access_token");
-                window.location.href = "/login";
-            }
+        if (error.response?.status === 401 && typeof window !== "undefined") {
+            localStorage.removeItem("access_token");
+            window.location.href = "/login";
         }
         return Promise.reject(error);
-    }
+    },
 );
 
+// -------------------------------------------------------------------
+// Unified API surface — every Backend endpoint in one place
+// -------------------------------------------------------------------
 export const gardenApi = {
-    startBatchAnalysis: async (limit: number = 5) => {
-        return api.post<{ workflow_id: string }>(`/garden/start?limit=${limit}`);
-    },
-    getBatchStatus: async (workflow_id: string) => {
-        return api.get<BatchStatus>(`/garden/status/${workflow_id}`);
-    },
-    triggerFix: async (repo_id: number) => {
-        return api.post<{ workflow_id: string; status: string }>(`/fix/${repo_id}`);
-    },
-    triggerAnalysis: async (repo_id: number) => {
-        return api.post<{ workflow_id: string; status: string }>(`/analyze/${repo_id}`);
-    },
+    /** GET /api/health */
+    checkHealth: () => api.get<HealthCheckResponse>("/health"),
+
+    /** POST /api/auth/exchange */
+    exchangeAuth: (code: string) =>
+        api.post<AuthExchangeResponse>("/auth/exchange", { code }),
+
+    /** GET /api/repos */
+    getRepos: () => api.get<Repo[]>("/repos"),
+
+    /** POST /api/analyze/{repo_id} */
+    triggerAnalysis: (repoId: number) =>
+        api.post<WorkflowResponse>(`/analyze/${repoId}`),
+
+    /** POST /api/garden/start?limit=N */
+    startBatchAnalysis: (limit: number = 5) =>
+        api.post<WorkflowResponse>(`/garden/start?limit=${limit}`),
+
+    /** GET /api/garden/status/{workflow_id} */
+    getBatchStatus: (workflowId: string) =>
+        api.get<BatchStatus>(`/garden/status/${workflowId}`),
+
+    /** POST /api/fix/{repo_id} */
+    triggerFix: (repoId: number) =>
+        api.post<WorkflowResponse>(`/fix/${repoId}`),
 };

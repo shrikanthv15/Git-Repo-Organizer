@@ -1,10 +1,9 @@
-export interface RepoHealth {
-    repo_name: string;
-    health_score: number; // 0-100
-    issues: string[]; // e.g. ["No README"]
-    last_commit_date: string;
-}
+// --------------------------------------------------
+// Types matching Backend Pydantic models exactly
+// See: backend/app/schemas/github.py & analysis.py
+// --------------------------------------------------
 
+/** backend/app/schemas/github.py -> Repo */
 export interface Repo {
     id: number;
     name: string;
@@ -12,16 +11,38 @@ export interface Repo {
     private: boolean;
     html_url: string;
     description: string | null;
+    /** Populated client-side after analysis */
     health?: RepoHealth;
 }
 
-export interface AuthExchangeResponse {
-    access_token: string;
-    token_type: string;
+/** backend/app/schemas/analysis.py -> RepoHealth */
+export interface RepoHealth {
+    repo_name: string;
+    health_score: number;
+    issues: string[];
+    last_commit_date: string;
+    pending_fix_url: string | null;
 }
 
+/** backend/app/schemas/analysis.py -> BatchStatus */
 export interface BatchStatus {
     total: number;
     completed: number;
-    results: RepoHealth[]; // The array of finished analyses
+    results: RepoHealth[];
+}
+
+/** Response from GET /api/health */
+export interface HealthCheckResponse {
+    status: string;
+    service: string;
+}
+
+/** Response from POST /api/auth/exchange */
+export interface AuthExchangeResponse {
+    access_token: string;
+}
+
+/** Response from POST /api/garden/start, /api/analyze/{id}, /api/fix/{id} */
+export interface WorkflowResponse {
+    workflow_id: string;
 }

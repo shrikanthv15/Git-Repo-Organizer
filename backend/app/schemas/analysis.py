@@ -8,6 +8,7 @@ class RepoHealth(BaseModel):
     health_score: int
     issues: list[str]
     last_commit_date: datetime
+    pending_fix_url: str | None = None
 
 
 class BatchInput(BaseModel):
