@@ -3,26 +3,14 @@ name: Claude Code Review
 on:
   pull_request:
     types: [opened, synchronize, ready_for_review, reopened]
-    # Optional: Only run on specific file changes
-    # paths:
-    #   - "src/**/*.ts"
-    #   - "src/**/*.tsx"
-    #   - "src/**/*.js"
-    #   - "src/**/*.jsx"
 
 jobs:
   claude-review:
-    # Optional: Filter by PR author
-    # if: |
-    #   github.event.pull_request.user.login == 'external-contributor' ||
-    #   github.event.pull_request.user.login == 'new-developer' ||
-    #   github.event.pull_request.author_association == 'FIRST_TIME_CONTRIBUTOR'
-
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      pull-requests: read
-      issues: read
+      pull-requests: write
+      issues: write
       id-token: write
 
     steps:
@@ -36,9 +24,16 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # We keep the plugins available, but give specific instructions below
           plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
           plugins: 'code-review@claude-code-plugins'
-          prompt: '/code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }}'
-          # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
-          # or https://code.claude.com/docs/en/cli-reference for available options
-
+          
+          # HERE IS THE CHANGE: Custom Strict Prompt
+          prompt: |
+            You are a Senior Tech Lead and Security Auditor.
+            Review the Pull Request at: ${{ github.repository }}/pull/${{ github.event.pull_request.number }}
+            
+            YOUR STRICT RULES:
+            1. SECURITY: Immediately flag hardcoded secrets (API keys, passwords) and PII.
+            2. QUALITY: Reject messy code, infinite loops, or undefined variables.
+            3. TONE: Be direct. Do not be polite. If critical issues exist, say "Request Changes".
