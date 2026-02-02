@@ -27,8 +27,8 @@ jobs:
           plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
           plugins: 'code-review@claude-code-plugins'
           
-          # THE FIX: Whitelist Bash so it can read diffs
-          claude_args: '--allowed-tools Bash,WebFetch'
+          # THE FIX: Whitelist Bash/WebFetch AND disable confirmation prompts
+          claude_args: '--allowed-tools Bash,WebFetch --dangerously-no-confirmation'
           
           prompt: |
             You are a Senior Tech Lead and Security Auditor.
