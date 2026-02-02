@@ -27,7 +27,7 @@ jobs:
           plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
           plugins: 'code-review@claude-code-plugins'
           
-          # THE FIX: Only whitelist the tools. Remove the dangerous flag.
+          # FIX: Allow tools so it can read files, but REMOVED the crashing flag
           claude_args: '--allowed-tools Bash,WebFetch'
           
           prompt: |
