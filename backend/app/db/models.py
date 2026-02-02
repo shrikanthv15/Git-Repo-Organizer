@@ -37,6 +37,7 @@ class AnalysisResult(SQLModel, table=True):
     health_score: int
     issues: list[str] = Field(default_factory=list, sa_column=Column(JSON, nullable=False))
     pending_fix_url: str | None = None
+    draft_proposal: dict | None = Field(default=None, sa_column=Column(JSON, nullable=True))
     last_analyzed_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     repository: Repository = Relationship(back_populates="analysis_results")

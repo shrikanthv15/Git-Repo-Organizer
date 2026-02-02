@@ -5,7 +5,10 @@
       "Bash(tree:*)",
       "Bash(npx next build)",
       "Bash(python:*)",
-      "Bash(uv lock:*)"
+      "Bash(uv lock:*)",
+      "Bash(npm install:*)",
+      "Bash(pnpm add:*)",
+      "Bash(dir \"C:\\\\Shri and Dishu Projects\\\\Git-Repo-Organizer\\\\frontend\\\\src\\\\app\" /s /b)"
     ]
   }
 }

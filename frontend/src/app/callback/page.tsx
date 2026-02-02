@@ -123,10 +123,10 @@ function CallbackContent() {
                     </div>
 
                     <button
-                        onClick={() => router.push("/login")}
+                        onClick={() => router.push("/")}
                         className="w-full rounded-lg bg-blue-600 px-4 py-3 font-semibold text-white transition-colors hover:bg-blue-700"
                     >
-                        Return to Login
+                        Return to Home
                     </button>
                 </div>
             </div>

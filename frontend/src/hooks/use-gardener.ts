@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { gardenApi } from "@/services/api";
-import type { Repo, BatchStatus } from "@/types/api";
+import type { Repo, BatchStatus, PortfolioStatus } from "@/types/api";
 
 // -------------------------------------------------------------------
 // useHealthCheck — connectivity probe
@@ -102,27 +102,26 @@ export function useGardener() {
         }
     }, [batchStatus, queryClient]);
 
-    // Fix Mutation (Janitor)
+    // Fix Mutation (Janitor) — now polls for draft_proposal instead of pending_fix_url
     const triggerFix = useMutation({
         mutationFn: async (repoId: number) => {
             const { data } = await gardenApi.triggerFix(repoId);
 
-            // Poll DB for pending_fix_url
-            let foundUrl: string | null = null;
+            // Poll DB for draft_proposal
+            let foundDraft: Record<string, string> | null = null;
             let attempts = 0;
-            const maxAttempts = 60; // 60 seconds
+            const maxAttempts = 90;
 
-            while (!foundUrl && attempts < maxAttempts) {
+            while (!foundDraft && attempts < maxAttempts) {
                 await new Promise((r) => setTimeout(r, 1000));
                 attempts++;
                 try {
-                    // Fetch all repos to check if this specific repo has the update
                     const res = await gardenApi.getRepos();
                     const repos = Array.isArray(res.data) ? res.data : [];
                     const updatedRepo = repos.find((r) => r.id === repoId);
 
-                    if (updatedRepo?.health?.pending_fix_url) {
-                        foundUrl = updatedRepo.health.pending_fix_url;
+                    if (updatedRepo?.draft_proposal && Object.keys(updatedRepo.draft_proposal).length > 0) {
+                        foundDraft = updatedRepo.draft_proposal;
                         break;
                     }
                 } catch (e) {
@@ -130,28 +129,22 @@ export function useGardener() {
                 }
             }
 
-            if (!foundUrl) throw new Error("Janitor timeout: PR URL not found after 60s");
+            if (!foundDraft) throw new Error("Janitor timeout: draft not ready after 90s");
 
-            return { repoId, workflowId: data.workflow_id, prUrl: foundUrl };
+            return { repoId, workflowId: data.workflow_id, draft: foundDraft };
         },
         onMutate: (repoId) => {
             setFixStatus((prev) => ({ ...prev, [repoId]: "pending" }));
         },
-        onSuccess: ({ repoId, prUrl }) => {
+        onSuccess: ({ repoId, draft }) => {
             setFixStatus((prev) => ({ ...prev, [repoId]: "done" }));
 
-            // Update cache with the confirmed URL
+            // Update cache with the draft_proposal
             queryClient.setQueryData<Repo[]>(["repos"], (old) => {
                 if (!old) return [];
                 return old.map((repo) => {
-                    if (repo.id === repoId && repo.health) {
-                        return {
-                            ...repo,
-                            health: {
-                                ...repo.health,
-                                pending_fix_url: prUrl,
-                            },
-                        };
+                    if (repo.id === repoId) {
+                        return { ...repo, draft_proposal: draft };
                     }
                     return repo;
                 });
@@ -162,6 +155,38 @@ export function useGardener() {
                 const next = { ...prev };
                 delete next[repoId];
                 return next;
+            });
+        },
+    });
+
+    // Commit Mutation — approve selected draft files, creates PR
+    const commitDocs = useMutation({
+        mutationFn: async ({
+            repoId,
+            selectedFiles,
+        }: {
+            repoId: number;
+            selectedFiles: string[];
+        }) => {
+            const { data } = await gardenApi.commitDocs(repoId, selectedFiles);
+            return { repoId, prUrl: data.pr_url };
+        },
+        onSuccess: ({ repoId, prUrl }) => {
+            // Clear draft and set pending_fix_url in cache
+            queryClient.setQueryData<Repo[]>(["repos"], (old) => {
+                if (!old) return [];
+                return old.map((repo) => {
+                    if (repo.id === repoId) {
+                        return {
+                            ...repo,
+                            draft_proposal: null,
+                            health: repo.health
+                                ? { ...repo.health, pending_fix_url: prUrl }
+                                : repo.health,
+                        };
+                    }
+                    return repo;
+                });
             });
         },
     });
@@ -212,8 +237,52 @@ export function useGardener() {
         startBatch,
         triggerFix,
         triggerSingleAnalysis,
+        commitDocs,
         batchStatus,
         isPolling: !!currentWorkflowId && !isBatchComplete,
         getFixStatus,
+    };
+}
+
+// -------------------------------------------------------------------
+// usePortfolio — trigger and poll the Portfolio Architect workflow
+// -------------------------------------------------------------------
+export function usePortfolio() {
+    const [workflowId, setWorkflowId] = useState<string | null>(null);
+    const [isComplete, setIsComplete] = useState(false);
+
+    const generate = useMutation({
+        mutationFn: async () => {
+            const { data } = await gardenApi.generatePortfolio();
+            return data.workflow_id;
+        },
+        onSuccess: (wfId) => {
+            setWorkflowId(wfId);
+            setIsComplete(false);
+        },
+    });
+
+    const { data: status } = useQuery({
+        queryKey: ["portfolioStatus", workflowId],
+        queryFn: async (): Promise<PortfolioStatus | null> => {
+            if (!workflowId) return null;
+            const { data } = await gardenApi.getPortfolioStatus(workflowId);
+            return data;
+        },
+        enabled: !!workflowId && !isComplete,
+        refetchInterval: 2000,
+    });
+
+    useEffect(() => {
+        if (!status) return;
+        if (status.stage === "complete" || status.stage === "failed") {
+            setIsComplete(true);
+        }
+    }, [status]);
+
+    return {
+        generate,
+        status,
+        isPolling: !!workflowId && !isComplete,
     };
 }

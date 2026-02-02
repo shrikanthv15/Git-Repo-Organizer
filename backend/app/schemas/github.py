@@ -13,6 +13,7 @@ class Repo(BaseModel):
     html_url: str
     description: str | None = None
     health: RepoHealth | None = None
+    draft_proposal: dict | None = None
 
 
 class AuthExchangeRequest(BaseModel):

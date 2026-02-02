@@ -13,6 +13,8 @@ export interface Repo {
     description: string | null;
     /** Populated client-side after analysis */
     health?: RepoHealth;
+    /** Draft doc files awaiting human review (Phase 13) */
+    draft_proposal?: Record<string, string> | null;
 }
 
 /** backend/app/schemas/analysis.py -> RepoHealth */
@@ -45,4 +47,26 @@ export interface AuthExchangeResponse {
 /** Response from POST /api/garden/start, /api/analyze/{id}, /api/fix/{id} */
 export interface WorkflowResponse {
     workflow_id: string;
+}
+
+/** Response from POST /api/repos/{id}/commit */
+export interface CommitResponse {
+    status: string;
+    pr_url: string;
+}
+
+/** Response from POST /api/portfolio/generate */
+export interface PortfolioGenerateResponse {
+    workflow_id: string;
+}
+
+/** Response from GET /api/portfolio/status/{workflow_id} */
+export interface PortfolioStatus {
+    stage: string;
+    total_repos: number;
+    analyzed: number;
+    top_repos: Record<string, unknown>[];
+    profile_url: string | null;
+    pr_url: string | null;
+    errors: string[];
 }

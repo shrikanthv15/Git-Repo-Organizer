@@ -1,14 +1,17 @@
+import json
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel
 from temporalio.client import Client
 
 from app.core.config import settings
-from app.db.crud import get_latest_analysis_for_repos
+from app.db.crud import get_draft_proposal, get_latest_analysis_for_repos, save_draft_proposal
 from app.db.session import get_session
 from app.schemas.analysis import RepoHealth
 from app.schemas.github import AuthExchangeRequest, Repo
 from app.services import github_service
+from app.temporal.activities import create_docs_pull_request_activity
 from app.temporal.workflows import (
     AnalysisInput,
     AnalysisWorkflow,
@@ -17,6 +20,8 @@ from app.temporal.workflows import (
     GreetingWorkflow,
     JanitorInput,
     JanitorWorkflow,
+    PortfolioInput,
+    PortfolioWorkflow,
 )
 
 router = APIRouter()
@@ -92,6 +97,8 @@ async def list_repos(token: str = Depends(get_current_token)):
                 last_commit_date=analysis.last_analyzed_at,
                 pending_fix_url=analysis.pending_fix_url,
             )
+            if analysis.draft_proposal:
+                repo_dict["draft_proposal"] = analysis.draft_proposal
         enriched.append(Repo(**repo_dict))
 
     return enriched
@@ -163,3 +170,81 @@ async def fix_repo(repo_id: int, token: str = Depends(get_current_token)):
         task_queue="gardener-queue",
     )
     return {"workflow_id": workflow_id}
+
+
+class CommitRequest(BaseModel):
+    selected_files: list[str]
+
+
+@router.post("/repos/{repo_id}/commit")
+async def commit_docs(
+    repo_id: int,
+    body: CommitRequest,
+    token: str = Depends(get_current_token),
+):
+    """Approve selected draft files and push them to GitHub as a PR."""
+    # 1. Fetch draft proposal from DB
+    with get_session() as session:
+        draft = get_draft_proposal(session, github_repo_id=repo_id)
+    if not draft:
+        raise HTTPException(status_code=404, detail="No draft proposal found for this repo")
+
+    # 2. Filter to only selected files
+    files = {k: v for k, v in draft.items() if k in body.selected_files}
+    if not files:
+        raise HTTPException(status_code=400, detail="No valid files selected")
+
+    # 3. Get repo full_name for the PR
+    try:
+        details = await github_service.get_repo_details(token, repo_id)
+    except Exception:
+        raise HTTPException(status_code=404, detail=f"Repo with id {repo_id} not found")
+
+    # 4. Create the PR via the existing activity function (called directly, not via Temporal)
+    files_json = json.dumps(files)
+    pr_url = await create_docs_pull_request_activity(
+        details["full_name"], files_json, token
+    )
+
+    # 5. Clear draft from DB
+    with get_session() as session:
+        save_draft_proposal(session, github_repo_id=repo_id, draft_proposal=None)
+        session.commit()
+
+    return {"status": "committed", "pr_url": pr_url}
+
+
+# ---------------------------------------------------------------------------
+# Phase 14: Portfolio
+# ---------------------------------------------------------------------------
+
+@router.post("/portfolio/generate")
+async def generate_portfolio(token: str = Depends(get_current_token)):
+    """Trigger the Portfolio Architect workflow."""
+    # Get the username from the token
+    username = await github_service.get_username(token)
+
+    client = await get_temporal_client()
+    workflow_id = f"portfolio-{username}-{uuid.uuid4()}"
+    await client.start_workflow(
+        PortfolioWorkflow.run,
+        PortfolioInput(access_token=token, username=username),
+        id=workflow_id,
+        task_queue="gardener-queue",
+    )
+    return {"workflow_id": workflow_id}
+
+
+@router.get("/portfolio/status/{workflow_id}")
+async def portfolio_status(workflow_id: str):
+    """Poll the Portfolio workflow status."""
+    client = await get_temporal_client()
+    handle = client.get_workflow_handle(workflow_id)
+    try:
+        status = await handle.query(PortfolioWorkflow.get_status)
+    except Exception:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Workflow '{workflow_id}' not found or not queryable",
+        )
+    return status

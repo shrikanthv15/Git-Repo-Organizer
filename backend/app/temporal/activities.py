@@ -13,6 +13,7 @@ from temporalio import activity
 from github import Auth, Github, GithubException
 
 from app.db.crud import (
+    save_draft_proposal,
     upsert_analysis_result,
     upsert_repository,
     upsert_user,
@@ -385,3 +386,344 @@ def _create_pull_request(repo_full_name: str, content: str, access_token: str) -
 async def create_pull_request_activity(repo_full_name: str, content: str, access_token: str) -> str:
     """Create a branch with README.md and open a Pull Request."""
     return await asyncio.to_thread(_create_pull_request, repo_full_name, content, access_token)
+
+
+# ---------------------------------------------------------------------------
+# Phase 12: Multi-Agent Documentation Squad
+# ---------------------------------------------------------------------------
+
+@activity.defn
+async def analyze_codebase_activity(
+    repo_name: str,
+    description: str,
+    file_tree: list[dict],
+    tech_stack_files: dict[str, str],
+) -> str:
+    """Analyze codebase and return a JSON summary string."""
+    return await llm_service.analyze_codebase(
+        repo_name, description, file_tree, tech_stack_files
+    )
+
+
+@activity.defn
+async def generate_doc_activity(
+    summary_json: str,
+    doc_type: str,
+    repo_name: str,
+    file_tree: list[dict],
+    tech_stack_files: dict[str, str],
+) -> dict:
+    """Generate a single doc file. Returns dict with filename, content, doc_type, error."""
+    filename = llm_service.DOC_TYPE_FILENAMES[doc_type]
+    try:
+        content = await llm_service.generate_doc(
+            summary_json, doc_type, repo_name, file_tree, tech_stack_files
+        )
+        return {
+            "filename": filename,
+            "content": content,
+            "doc_type": doc_type,
+            "error": None,
+        }
+    except Exception as exc:
+        activity.logger.error("generate_doc_activity failed for %s: %s", doc_type, exc)
+        return {
+            "filename": filename,
+            "content": "",
+            "doc_type": doc_type,
+            "error": str(exc),
+        }
+
+
+def _create_docs_pull_request(
+    repo_full_name: str,
+    files_json: str,
+    access_token: str,
+) -> str:
+    """Create a branch, commit multiple doc files, and open a single PR."""
+    files: dict[str, str] = json.loads(files_json)
+
+    g = Github(access_token)
+    repo = g.get_repo(repo_full_name)
+
+    target_branch = "gardener/docs-suite"
+    default_branch_name = repo.default_branch
+    default_branch = repo.get_branch(default_branch_name)
+
+    # Get or create the branch
+    try:
+        ref = repo.get_git_ref(f"heads/{target_branch}")
+        ref.edit(sha=default_branch.commit.sha, force=True)
+    except GithubException:
+        repo.create_git_ref(
+            ref=f"refs/heads/{target_branch}",
+            sha=default_branch.commit.sha,
+        )
+
+    # Create or update each file on the branch
+    for file_path, content in files.items():
+        message = f"🌿 Gardener: Generate {file_path}"
+        try:
+            existing = repo.get_contents(file_path, ref=target_branch)
+            repo.update_file(
+                path=file_path,
+                message=message,
+                content=content,
+                sha=existing.sha,
+                branch=target_branch,
+            )
+        except GithubException:
+            repo.create_file(
+                path=file_path,
+                message=message,
+                content=content,
+                branch=target_branch,
+            )
+
+    # Check for existing PR to avoid duplicates
+    existing_prs = repo.get_pulls(
+        state="open",
+        head=f"{repo.owner.login}:{target_branch}",
+        base=default_branch_name,
+    )
+    if existing_prs.totalCount > 0:
+        pr = existing_prs[0]
+        g.close()
+        return pr.html_url
+
+    # Create new PR
+    file_list = ", ".join(files.keys())
+    try:
+        pr = repo.create_pull(
+            title="🌿 Gardener: Documentation Suite",
+            body=(
+                "This PR contains auto-generated documentation by the GitHub Gardener AI "
+                "using deep code analysis.\n\n"
+                f"**Files generated:** {file_list}"
+            ),
+            head=target_branch,
+            base=default_branch_name,
+        )
+        pr_url = pr.html_url
+        g.close()
+        return pr_url
+    except GithubException as e:
+        if e.status == 422 and "No commits between" in str(e.data):
+            g.close()
+            return f"{repo.html_url}/tree/{target_branch}"
+        raise e
+
+
+@activity.defn
+async def create_docs_pull_request_activity(
+    repo_full_name: str,
+    files_json: str,
+    access_token: str,
+) -> str:
+    """Create a branch with multiple doc files and open a single Pull Request."""
+    return await asyncio.to_thread(
+        _create_docs_pull_request, repo_full_name, files_json, access_token
+    )
+
+
+# ---------------------------------------------------------------------------
+# Phase 13: Human-in-the-Loop — save drafts to DB
+# ---------------------------------------------------------------------------
+
+@activity.defn
+async def save_draft_proposal_activity(
+    github_repo_id: int,
+    files_json: str,
+) -> bool:
+    """Persist generated doc files as a draft_proposal in the DB."""
+    files: dict = json.loads(files_json)
+
+    def _save() -> bool:
+        with get_session() as session:
+            ok = save_draft_proposal(
+                session,
+                github_repo_id=github_repo_id,
+                draft_proposal=files,
+            )
+            session.commit()
+            return ok
+
+    return await asyncio.to_thread(_save)
+
+
+# ---------------------------------------------------------------------------
+# Phase 14: Portfolio Architect
+# ---------------------------------------------------------------------------
+
+def _fetch_repos_extended(access_token: str) -> list[dict]:
+    """Fetch all owner repos with extended metadata (stars, fork, language, pushed_at)."""
+    g = Github(auth=Auth.Token(access_token))
+    repos: list[dict] = []
+    for r in g.get_user().get_repos(affiliation="owner"):
+        repos.append({
+            "id": r.id,
+            "name": r.name,
+            "full_name": r.full_name,
+            "description": r.description or "",
+            "html_url": r.html_url,
+            "private": r.private,
+            "fork": r.fork,
+            "stargazers_count": r.stargazers_count,
+            "language": r.language,
+            "pushed_at": r.pushed_at.isoformat() if r.pushed_at else None,
+        })
+    g.close()
+    return repos
+
+
+@activity.defn
+async def fetch_repos_extended_activity(access_token: str) -> list[dict]:
+    """Fetch all repos with extended metadata for portfolio selection."""
+    return await asyncio.to_thread(_fetch_repos_extended, access_token)
+
+
+@activity.defn
+async def generate_profile_readme_activity(
+    top_repos_json: str,
+    username: str,
+) -> str:
+    """Generate a GitHub Profile README from the top repos."""
+    top_repos: list[dict] = json.loads(top_repos_json)
+    return await llm_service.generate_profile_readme(top_repos, username)
+
+
+def _create_or_update_profile_repo(
+    username: str,
+    readme_content: str,
+    access_token: str,
+) -> dict:
+    """Create or update the username/username profile repo with a new README."""
+    g = Github(access_token)
+    user = g.get_user()
+    profile_repo_name = username
+
+    # Check if profile repo exists
+    profile_repo = None
+    try:
+        profile_repo = g.get_repo(f"{username}/{profile_repo_name}")
+    except GithubException as exc:
+        if exc.status != 404:
+            raise
+
+    if profile_repo is None:
+        # Create the special profile repo
+        profile_repo = user.create_repo(
+            name=profile_repo_name,
+            description=f"{username}'s GitHub Profile",
+            auto_init=True,
+            private=False,
+        )
+        # Commit README directly to main since it's a new repo
+        try:
+            existing = profile_repo.get_contents("README.md", ref=profile_repo.default_branch)
+            profile_repo.update_file(
+                path="README.md",
+                message="🌿 Gardener: Professional Profile README",
+                content=readme_content,
+                sha=existing.sha,
+                branch=profile_repo.default_branch,
+            )
+        except GithubException:
+            profile_repo.create_file(
+                path="README.md",
+                message="🌿 Gardener: Professional Profile README",
+                content=readme_content,
+                branch=profile_repo.default_branch,
+            )
+        g.close()
+        return {
+            "profile_url": profile_repo.html_url,
+            "pr_url": None,
+            "created_new": True,
+        }
+
+    # Profile repo exists — create a branch and PR
+    target_branch = "gardener/update-profile"
+    default_branch_name = profile_repo.default_branch
+    default_branch = profile_repo.get_branch(default_branch_name)
+
+    try:
+        ref = profile_repo.get_git_ref(f"heads/{target_branch}")
+        ref.edit(sha=default_branch.commit.sha, force=True)
+    except GithubException:
+        profile_repo.create_git_ref(
+            ref=f"refs/heads/{target_branch}",
+            sha=default_branch.commit.sha,
+        )
+
+    # Create or update README on the branch
+    try:
+        existing = profile_repo.get_contents("README.md", ref=target_branch)
+        profile_repo.update_file(
+            path="README.md",
+            message="🌿 Gardener: Professional Profile README",
+            content=readme_content,
+            sha=existing.sha,
+            branch=target_branch,
+        )
+    except GithubException:
+        profile_repo.create_file(
+            path="README.md",
+            message="🌿 Gardener: Professional Profile README",
+            content=readme_content,
+            branch=target_branch,
+        )
+
+    # Check for existing PR
+    existing_prs = profile_repo.get_pulls(
+        state="open",
+        head=f"{username}:{target_branch}",
+        base=default_branch_name,
+    )
+    if existing_prs.totalCount > 0:
+        pr = existing_prs[0]
+        g.close()
+        return {
+            "profile_url": profile_repo.html_url,
+            "pr_url": pr.html_url,
+            "created_new": False,
+        }
+
+    # Create new PR
+    try:
+        pr = profile_repo.create_pull(
+            title="🌿 Gardener: Professional Profile README",
+            body=(
+                "This profile README was auto-generated by the GitHub Gardener AI.\n\n"
+                "It showcases your top projects, tech stack, and developer brand."
+            ),
+            head=target_branch,
+            base=default_branch_name,
+        )
+        g.close()
+        return {
+            "profile_url": profile_repo.html_url,
+            "pr_url": pr.html_url,
+            "created_new": False,
+        }
+    except GithubException as e:
+        if e.status == 422 and "No commits between" in str(e.data):
+            g.close()
+            return {
+                "profile_url": profile_repo.html_url,
+                "pr_url": f"{profile_repo.html_url}/tree/{target_branch}",
+                "created_new": False,
+            }
+        raise
+
+
+@activity.defn
+async def create_or_update_profile_repo_activity(
+    username: str,
+    readme_content: str,
+    access_token: str,
+) -> dict:
+    """Create or update the GitHub profile repo with a generated README."""
+    return await asyncio.to_thread(
+        _create_or_update_profile_repo, username, readme_content, access_token
+    )

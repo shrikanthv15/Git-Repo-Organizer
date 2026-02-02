@@ -2,7 +2,10 @@ import axios from "axios";
 import type {
     AuthExchangeResponse,
     BatchStatus,
+    CommitResponse,
     HealthCheckResponse,
+    PortfolioGenerateResponse,
+    PortfolioStatus,
     Repo,
     WorkflowResponse,
 } from "@/types/api";
@@ -43,7 +46,7 @@ api.interceptors.response.use(
     (error) => {
         if (error.response?.status === 401 && typeof window !== "undefined") {
             localStorage.removeItem("access_token");
-            window.location.href = "/login";
+            window.location.href = "/";
         }
         return Promise.reject(error);
     },
@@ -78,4 +81,18 @@ export const gardenApi = {
     /** POST /api/fix/{repo_id} */
     triggerFix: (repoId: number) =>
         api.post<WorkflowResponse>(`/fix/${repoId}`),
+
+    /** POST /api/repos/{repo_id}/commit */
+    commitDocs: (repoId: number, selectedFiles: string[]) =>
+        api.post<CommitResponse>(`/repos/${repoId}/commit`, {
+            selected_files: selectedFiles,
+        }),
+
+    /** POST /api/portfolio/generate */
+    generatePortfolio: () =>
+        api.post<PortfolioGenerateResponse>("/portfolio/generate"),
+
+    /** GET /api/portfolio/status/{workflow_id} */
+    getPortfolioStatus: (workflowId: string) =>
+        api.get<PortfolioStatus>(`/portfolio/status/${workflowId}`),
 };

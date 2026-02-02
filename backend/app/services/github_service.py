@@ -84,3 +84,16 @@ def _get_repo_details(access_token: str, repo_id: int) -> dict:
 async def get_repo_details(access_token: str, repo_id: int) -> dict:
     """Look up a repo's name, full_name, and description by ID."""
     return await asyncio.to_thread(_get_repo_details, access_token, repo_id)
+
+
+def _get_username(access_token: str) -> str:
+    """Synchronous PyGithub call — run via asyncio.to_thread."""
+    g = Github(auth=Auth.Token(access_token))
+    username = g.get_user().login
+    g.close()
+    return username
+
+
+async def get_username(access_token: str) -> str:
+    """Get the authenticated user's GitHub username."""
+    return await asyncio.to_thread(_get_username, access_token)

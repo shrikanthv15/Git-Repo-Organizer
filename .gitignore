@@ -1,6 +1,62 @@
+# ─────────────────────────────────────────────────
+# Git Repo Organizer - .gitignore
+# ─────────────────────────────────────────────────
+
+# Dependencies
 node_modules/
+.pnpm-store/
+
+# Python
 __pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# Environment files (use .env.example as template)
 .env
 .env.local
-.venv/
+.env.*.local
+frontend/.env.local
+
+# Build outputs
+.next/
+out/
+dist/
+build/
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
 .DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Testing
+coverage/
+.nyc_output/
+
+# Docker volumes (if mounted locally)
+postgres_data/
+
+# Temporary files
+*.tmp
+*.temp
+
+# Reference/scratch folders (not part of project)
+Vo Code/
+.claude/
+scripts/
+
+# Development prompts/notes
+prompt_*.md
+*.prompt
+

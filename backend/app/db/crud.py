@@ -86,6 +86,55 @@ def update_structure_map(
     return repo
 
 
+def save_draft_proposal(
+    session: Session,
+    *,
+    github_repo_id: int,
+    draft_proposal: dict | None,
+) -> bool:
+    """Save or clear a draft_proposal on the latest AnalysisResult for a repo."""
+    repo = session.exec(
+        select(Repository).where(Repository.github_repo_id == github_repo_id)
+    ).first()
+    if not repo:
+        return False
+
+    result = session.exec(
+        select(AnalysisResult)
+        .where(AnalysisResult.repo_id == repo.id)
+        .order_by(AnalysisResult.last_analyzed_at.desc())
+    ).first()
+    if not result:
+        return False
+
+    result.draft_proposal = draft_proposal
+    session.flush()
+    return True
+
+
+def get_draft_proposal(
+    session: Session,
+    *,
+    github_repo_id: int,
+) -> dict | None:
+    """Fetch the draft_proposal for a repo, if any."""
+    repo = session.exec(
+        select(Repository).where(Repository.github_repo_id == github_repo_id)
+    ).first()
+    if not repo:
+        return None
+
+    result = session.exec(
+        select(AnalysisResult)
+        .where(AnalysisResult.repo_id == repo.id)
+        .order_by(AnalysisResult.last_analyzed_at.desc())
+    ).first()
+    if not result:
+        return None
+
+    return result.draft_proposal
+
+
 def get_latest_analysis_for_repos(
     session: Session, github_repo_ids: list[int]
 ) -> dict[int, AnalysisResult]:
