@@ -17,18 +17,19 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 1
+          fetch-depth: 0
 
       - name: Run Claude Code Review
         id: claude-review
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          # We keep the plugins available, but give specific instructions below
           plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
           plugins: 'code-review@claude-code-plugins'
           
-          # HERE IS THE CHANGE: Custom Strict Prompt
+          # FIX: Allow tools so it can read files, but REMOVED the crashing flag
+          claude_args: '--allowed-tools Bash,WebFetch'
+          
           prompt: |
             You are a Senior Tech Lead and Security Auditor.
             Review the Pull Request at: ${{ github.repository }}/pull/${{ github.event.pull_request.number }}
