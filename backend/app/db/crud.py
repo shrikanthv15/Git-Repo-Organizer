@@ -4,6 +4,11 @@ from sqlmodel import Session, select
 
 from app.db.models import AnalysisResult, Repository, User
 
+# Valid analysis result statuses
+STATUS_IDLE = "idle"
+STATUS_DRAFTING = "drafting_docs"
+STATUS_REVIEW_READY = "review_ready"
+
 
 def upsert_user(session: Session, *, github_id: int, username: str) -> User:
     user = session.exec(select(User).where(User.github_id == github_id)).first()
@@ -53,6 +58,7 @@ def upsert_analysis_result(
     health_score: int,
     issues: list[str],
     pending_fix_url: str | None,
+    last_gardener_run_at: datetime | None = None,
 ) -> AnalysisResult:
     result = session.exec(
         select(AnalysisResult).where(AnalysisResult.repo_id == repo_id)
@@ -62,12 +68,15 @@ def upsert_analysis_result(
         result.issues = issues
         result.pending_fix_url = pending_fix_url
         result.last_analyzed_at = datetime.now(timezone.utc)
+        if last_gardener_run_at is not None:
+            result.last_gardener_run_at = last_gardener_run_at
     else:
         result = AnalysisResult(
             repo_id=repo_id,
             health_score=health_score,
             issues=issues,
             pending_fix_url=pending_fix_url,
+            last_gardener_run_at=last_gardener_run_at,
         )
         session.add(result)
     session.flush()
@@ -133,6 +142,58 @@ def get_draft_proposal(
         return None
 
     return result.draft_proposal
+
+
+def set_repo_status(
+    session: Session, *, github_repo_id: int, status: str
+) -> bool:
+    """Update the status field on the latest AnalysisResult for a repo."""
+    repo = session.exec(
+        select(Repository).where(Repository.github_repo_id == github_repo_id)
+    ).first()
+    if not repo:
+        return False
+    result = session.exec(
+        select(AnalysisResult)
+        .where(AnalysisResult.repo_id == repo.id)
+        .order_by(AnalysisResult.last_analyzed_at.desc())
+    ).first()
+    if not result:
+        return False
+    result.status = status
+    session.flush()
+    return True
+
+
+def get_repos_with_pending_pr(session: Session) -> list[tuple[str, str]]:
+    """Return (full_name, pending_fix_url) for all repos with an open PR tracked."""
+    stmt = (
+        select(Repository.full_name, AnalysisResult.pending_fix_url)
+        .join(AnalysisResult, AnalysisResult.repo_id == Repository.id)
+        .where(AnalysisResult.pending_fix_url.isnot(None))
+        .where(AnalysisResult.pending_fix_url != "")
+    )
+    rows = session.exec(stmt).all()
+    return [(full_name, url) for full_name, url in rows]
+
+
+def clear_pending_fix_for_repo(session: Session, *, repo_full_name: str) -> bool:
+    """Clear pending_fix_url on all analysis results for a repo by full_name."""
+    repo = session.exec(
+        select(Repository).where(Repository.full_name == repo_full_name)
+    ).first()
+    if not repo:
+        return False
+
+    results = session.exec(
+        select(AnalysisResult)
+        .where(AnalysisResult.repo_id == repo.id)
+        .where(AnalysisResult.pending_fix_url.isnot(None))
+    ).all()
+    for result in results:
+        result.pending_fix_url = None
+    session.flush()
+    return len(results) > 0
 
 
 def get_latest_analysis_for_repos(

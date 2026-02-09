@@ -20,7 +20,9 @@ with workflow.unsafe.imports_passed_through():
         generate_profile_readme_activity,
         generate_readme_activity,
         get_repo_context_activity,
+        portfolio_deep_scan_activity,
         save_draft_proposal_activity,
+        set_repo_status_activity,
         say_hello,
     )
 
@@ -146,6 +148,14 @@ class JanitorWorkflow:
 
         repo_url = f"https://github.com/{input.repo_full_name}"
 
+        # Step 0: Mark repo as "drafting_docs" in DB (persistent state)
+        if input.github_repo_id:
+            await workflow.execute_activity(
+                set_repo_status_activity,
+                args=[input.github_repo_id, "drafting_docs"],
+                start_to_close_timeout=timedelta(seconds=10),
+            )
+
         # Step 1: Deep Scan — clone repo, map files, read key configs
         scan_result = await workflow.execute_activity(
             deep_scan_repo,
@@ -227,6 +237,14 @@ class JanitorWorkflow:
             start_to_close_timeout=timedelta(seconds=30),
         )
 
+        # Step 6: Mark repo as "review_ready" in DB
+        if input.github_repo_id:
+            await workflow.execute_activity(
+                set_repo_status_activity,
+                args=[input.github_repo_id, "review_ready"],
+                start_to_close_timeout=timedelta(seconds=10),
+            )
+
         status = "review_ready" if not errors else "partial_review_ready"
         return {
             "status": status,
@@ -243,6 +261,9 @@ class JanitorWorkflow:
 class PortfolioInput:
     access_token: str
     username: str
+    repo_ids: list[int] | None = None
+    bio: str = ""
+    links_json: str = "{}"
 
 
 @workflow.defn
@@ -250,10 +271,8 @@ class PortfolioWorkflow:
     def __init__(self) -> None:
         self._stage: str = "starting"
         self._total_repos: int = 0
-        self._analyzed: int = 0
-        self._top_repos: list[dict] = []
-        self._profile_url: str | None = None
-        self._pr_url: str | None = None
+        self._scanned: int = 0
+        self._draft_readme: str | None = None
         self._errors: list[str] = []
 
     @workflow.query
@@ -261,10 +280,8 @@ class PortfolioWorkflow:
         return {
             "stage": self._stage,
             "total_repos": self._total_repos,
-            "analyzed": self._analyzed,
-            "top_repos": list(self._top_repos),
-            "profile_url": self._profile_url,
-            "pr_url": self._pr_url,
+            "scanned": self._scanned,
+            "draft_readme": self._draft_readme,
             "errors": list(self._errors),
         }
 
@@ -272,8 +289,8 @@ class PortfolioWorkflow:
     async def run(self, input: PortfolioInput) -> dict:
         import json as _json
 
-        # Step 1: Fetch all repos with extended metadata
-        self._stage = "scanning"
+        # Step 1: Resolving — fetch all repos, filter to selected IDs
+        self._stage = "resolving"
         all_repos = await workflow.execute_activity(
             fetch_repos_extended_activity,
             args=[input.access_token],
@@ -283,70 +300,70 @@ class PortfolioWorkflow:
                 initial_interval=timedelta(seconds=5),
             ),
         )
-        self._total_repos = len(all_repos)
 
-        # Step 2: Batch health analysis in groups of 5
-        self._stage = "analyzing"
-        health_scores: dict[int, int] = {}
-        batch_size = 5
+        if input.repo_ids:
+            selected_ids = set(input.repo_ids)
+            selected_repos = [r for r in all_repos if r["id"] in selected_ids]
+        else:
+            # Fallback: auto-select top 4 non-fork repos by stars
+            candidates = [r for r in all_repos if not r.get("fork", False)]
+            candidates.sort(key=lambda r: (
+                r.get("stargazers_count", 0),
+                r.get("pushed_at") or "",
+            ), reverse=True)
+            selected_repos = candidates[:4]
 
-        for i in range(0, len(all_repos), batch_size):
-            batch = all_repos[i : i + batch_size]
-            tasks = []
-            for repo in batch:
-                task = workflow.execute_activity(
-                    analyze_repo_health,
-                    args=[repo["full_name"], input.access_token],
-                    start_to_close_timeout=timedelta(seconds=30),
-                    retry_policy=RetryPolicy(
-                        maximum_attempts=2,
-                        initial_interval=timedelta(seconds=3),
-                    ),
-                )
-                tasks.append((repo["id"], task))
+        self._total_repos = len(selected_repos)
 
-            for repo_id, task in tasks:
-                try:
-                    result = await task
-                    health_scores[repo_id] = result.get("health_score", 0)
-                except Exception as exc:
-                    health_scores[repo_id] = 0
-                    self._errors.append(f"Analysis failed for repo {repo_id}: {str(exc)}")
-                self._analyzed += 1
-
-        # Step 3: Selection algorithm — filter forks, sort, pick top 4
-        self._stage = "selecting"
-        candidates = [r for r in all_repos if not r.get("fork", False)]
-
-        # Sort descending by: health_score, stargazers, recency
-        candidates.sort(key=lambda r: (
-            health_scores.get(r["id"], 0),
-            r.get("stargazers_count", 0),
-            r.get("pushed_at") or "",
-        ), reverse=True)
-
-        top_4 = candidates[:4]
-        # Enrich with health scores
-        for repo in top_4:
-            repo["health_score"] = health_scores.get(repo["id"], 0)
-        self._top_repos = top_4
-
-        if not top_4:
+        if not selected_repos:
             self._stage = "failed"
+            self._errors.append("No eligible repositories found")
             return {
                 "status": "failure",
-                "profile_url": None,
-                "pr_url": None,
-                "top_repos": [],
-                "errors": ["No eligible repositories found"],
+                "draft_readme": None,
+                "errors": self._errors,
             }
 
-        # Step 4: Generate profile README
+        # Step 2: Scanning — deep scan each selected repo
+        self._stage = "scanning"
+        scanned_repos: list[dict] = []
+
+        for repo in selected_repos:
+            try:
+                scan_result = await workflow.execute_activity(
+                    portfolio_deep_scan_activity,
+                    args=[repo["full_name"], input.access_token],
+                    start_to_close_timeout=timedelta(seconds=60),
+                    retry_policy=RetryPolicy(
+                        maximum_attempts=2,
+                        initial_interval=timedelta(seconds=5),
+                    ),
+                )
+                scanned_repos.append(scan_result)
+            except Exception as exc:
+                self._errors.append(f"Scan failed for {repo['full_name']}: {str(exc)}")
+                # Still include basic info so the repo shows up in the profile
+                scanned_repos.append({
+                    "full_name": repo["full_name"],
+                    "name": repo.get("name", ""),
+                    "description": repo.get("description", ""),
+                    "html_url": repo.get("html_url", ""),
+                    "language": repo.get("language", ""),
+                    "stargazers_count": repo.get("stargazers_count", 0),
+                    "forks_count": 0,
+                    "topics": [],
+                    "readme_content": "",
+                    "dependencies": {},
+                    "frameworks": [],
+                })
+            self._scanned += 1
+
+        # Step 3: Generating — produce profile README with rich context
         self._stage = "generating"
-        top_repos_json = _json.dumps(top_4, default=str)
+        top_repos_json = _json.dumps(scanned_repos, default=str)
         readme_content = await workflow.execute_activity(
             generate_profile_readme_activity,
-            args=[top_repos_json, input.username],
+            args=[top_repos_json, input.username, input.bio, input.links_json],
             start_to_close_timeout=timedelta(seconds=120),
             retry_policy=RetryPolicy(
                 maximum_attempts=2,
@@ -354,26 +371,12 @@ class PortfolioWorkflow:
             ),
         )
 
-        # Step 5: Create or update the profile repo
-        self._stage = "publishing"
-        result = await workflow.execute_activity(
-            create_or_update_profile_repo_activity,
-            args=[input.username, readme_content, input.access_token],
-            start_to_close_timeout=timedelta(seconds=60),
-            retry_policy=RetryPolicy(
-                maximum_attempts=2,
-                initial_interval=timedelta(seconds=5),
-            ),
-        )
-
-        self._profile_url = result["profile_url"]
-        self._pr_url = result.get("pr_url")
-        self._stage = "complete"
+        # Step 4: Draft ready — store in workflow state, do NOT auto-publish
+        self._stage = "draft_ready"
+        self._draft_readme = readme_content
 
         return {
-            "status": "success",
-            "profile_url": result["profile_url"],
-            "pr_url": result.get("pr_url"),
-            "top_repos": [r["full_name"] for r in top_4],
+            "status": "draft_ready",
+            "draft_readme": readme_content,
             "errors": self._errors,
         }

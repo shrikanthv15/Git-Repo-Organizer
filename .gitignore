@@ -51,12 +51,3 @@ postgres_data/
 *.tmp
 *.temp
 
-# Reference/scratch folders (not part of project)
-Vo Code/
-.claude/
-scripts/
-
-# Development prompts/notes
-prompt_*.md
-*.prompt
-

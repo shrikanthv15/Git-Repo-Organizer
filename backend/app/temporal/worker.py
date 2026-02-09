@@ -1,7 +1,10 @@
 import asyncio
+import logging
 
 from temporalio.client import Client
 from temporalio.worker import Worker
+
+logger = logging.getLogger(__name__)
 
 from app.core.config import settings
 from app.temporal.activities import (
@@ -18,7 +21,9 @@ from app.temporal.activities import (
     generate_profile_readme_activity,
     generate_readme_activity,
     get_repo_context_activity,
+    portfolio_deep_scan_activity,
     save_draft_proposal_activity,
+    set_repo_status_activity,
     say_hello,
 )
 from app.temporal.workflows import (
@@ -57,14 +62,16 @@ async def main():
             generate_deep_readme_activity,
             generate_doc_activity,
             generate_profile_readme_activity,
+            portfolio_deep_scan_activity,
             create_pull_request_activity,
             create_docs_pull_request_activity,
             create_or_update_profile_repo_activity,
             save_draft_proposal_activity,
+            set_repo_status_activity,
         ],
     )
 
-    print(f"Worker started, listening on queue: {TASK_QUEUE}")
+    logger.info("Worker started, listening on queue: %s", TASK_QUEUE)
     await worker.run()
 
 

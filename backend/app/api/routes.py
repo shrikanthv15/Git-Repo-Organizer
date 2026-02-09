@@ -6,12 +6,12 @@ from pydantic import BaseModel
 from temporalio.client import Client
 
 from app.core.config import settings
-from app.db.crud import get_draft_proposal, get_latest_analysis_for_repos, save_draft_proposal
+from app.db.crud import get_draft_proposal, get_latest_analysis_for_repos, save_draft_proposal, set_repo_status
 from app.db.session import get_session
 from app.schemas.analysis import RepoHealth
 from app.schemas.github import AuthExchangeRequest, Repo
 from app.services import github_service
-from app.temporal.activities import create_docs_pull_request_activity
+from app.temporal.activities import create_docs_pull_request_activity, create_or_update_profile_repo_activity, sync_pr_status_activity
 from app.temporal.workflows import (
     AnalysisInput,
     AnalysisWorkflow,
@@ -44,7 +44,7 @@ def get_current_token(request: Request) -> str:
 
 @router.get("/health")
 async def health_check():
-    return {"status": "healthy", "service": "Gardener Backend"}
+    return {"status": "healthy", "service": "GitHub Gardener"}
 
 
 @router.post("/auth/exchange")
@@ -59,7 +59,7 @@ async def auth_exchange(body: AuthExchangeRequest):
 
 
 @router.post("/test-workflow")
-async def test_workflow():
+async def test_workflow(token: str = Depends(get_current_token)):
     client = await get_temporal_client()
     result = await client.execute_workflow(
         GreetingWorkflow.run,
@@ -96,6 +96,8 @@ async def list_repos(token: str = Depends(get_current_token)):
                 issues=analysis.issues,
                 last_commit_date=analysis.last_analyzed_at,
                 pending_fix_url=analysis.pending_fix_url,
+                status=analysis.status,
+                last_gardener_run_at=analysis.last_gardener_run_at,
             )
             if analysis.draft_proposal:
                 repo_dict["draft_proposal"] = analysis.draft_proposal
@@ -125,7 +127,7 @@ async def analyze_repo(repo_id: int, token: str = Depends(get_current_token)):
 @router.post("/garden/start")
 async def start_garden(
     token: str = Depends(get_current_token),
-    limit: int = 3,
+    limit: int = 0,
 ):
     client = await get_temporal_client()
     workflow_id = f"garden-{uuid.uuid4()}"
@@ -139,7 +141,7 @@ async def start_garden(
 
 
 @router.get("/garden/status/{workflow_id}")
-async def garden_status(workflow_id: str):
+async def garden_status(workflow_id: str, token: str = Depends(get_current_token)):
     client = await get_temporal_client()
     handle = client.get_workflow_handle(workflow_id)
     try:
@@ -172,8 +174,16 @@ async def fix_repo(repo_id: int, token: str = Depends(get_current_token)):
     return {"workflow_id": workflow_id}
 
 
+@router.post("/sync")
+async def sync_pr_status(token: str = Depends(get_current_token)):
+    """Check GitHub for merged/closed PRs and update local DB state."""
+    updated_count = await sync_pr_status_activity(token)
+    return {"status": "synced", "updated_count": updated_count}
+
+
 class CommitRequest(BaseModel):
     selected_files: list[str]
+    edited_contents: dict[str, str] | None = None  # filename -> edited content
 
 
 @router.post("/repos/{repo_id}/commit")
@@ -189,10 +199,14 @@ async def commit_docs(
     if not draft:
         raise HTTPException(status_code=404, detail="No draft proposal found for this repo")
 
-    # 2. Filter to only selected files
+    # 2. Filter to only selected files, apply edits if provided
     files = {k: v for k, v in draft.items() if k in body.selected_files}
     if not files:
         raise HTTPException(status_code=400, detail="No valid files selected")
+    if body.edited_contents:
+        for filename, content in body.edited_contents.items():
+            if filename in files:
+                files[filename] = content
 
     # 3. Get repo full_name for the PR
     try:
@@ -206,29 +220,52 @@ async def commit_docs(
         details["full_name"], files_json, token
     )
 
-    # 5. Clear draft from DB
+    # 5. Clear draft from DB and reset status to idle
     with get_session() as session:
         save_draft_proposal(session, github_repo_id=repo_id, draft_proposal=None)
+        set_repo_status(session, github_repo_id=repo_id, status="idle")
         session.commit()
 
     return {"status": "committed", "pr_url": pr_url}
 
 
 # ---------------------------------------------------------------------------
-# Phase 14: Portfolio
+# Phase 14 / 19: Portfolio Studio
 # ---------------------------------------------------------------------------
 
+class PortfolioGenerateRequest(BaseModel):
+    repo_ids: list[int]
+    bio: str = ""
+    links: dict[str, str] | None = None
+
+
+class PortfolioPublishRequest(BaseModel):
+    readme_content: str
+
+
 @router.post("/portfolio/generate")
-async def generate_portfolio(token: str = Depends(get_current_token)):
-    """Trigger the Portfolio Architect workflow."""
-    # Get the username from the token
+async def generate_portfolio(
+    body: PortfolioGenerateRequest,
+    token: str = Depends(get_current_token),
+):
+    """Trigger the Portfolio Studio workflow with user-selected repos."""
+    if not body.repo_ids or len(body.repo_ids) > 6:
+        raise HTTPException(status_code=400, detail="Select between 1 and 6 repositories")
+
     username = await github_service.get_username(token)
+    links_json = json.dumps(body.links) if body.links else "{}"
 
     client = await get_temporal_client()
     workflow_id = f"portfolio-{username}-{uuid.uuid4()}"
     await client.start_workflow(
         PortfolioWorkflow.run,
-        PortfolioInput(access_token=token, username=username),
+        PortfolioInput(
+            access_token=token,
+            username=username,
+            repo_ids=body.repo_ids,
+            bio=body.bio,
+            links_json=links_json,
+        ),
         id=workflow_id,
         task_queue="gardener-queue",
     )
@@ -236,8 +273,8 @@ async def generate_portfolio(token: str = Depends(get_current_token)):
 
 
 @router.get("/portfolio/status/{workflow_id}")
-async def portfolio_status(workflow_id: str):
-    """Poll the Portfolio workflow status."""
+async def portfolio_status(workflow_id: str, token: str = Depends(get_current_token)):
+    """Poll the Portfolio workflow status — now returns draft_readme."""
     client = await get_temporal_client()
     handle = client.get_workflow_handle(workflow_id)
     try:
@@ -248,3 +285,20 @@ async def portfolio_status(workflow_id: str):
             detail=f"Workflow '{workflow_id}' not found or not queryable",
         )
     return status
+
+
+@router.post("/portfolio/publish")
+async def publish_portfolio(
+    body: PortfolioPublishRequest,
+    token: str = Depends(get_current_token),
+):
+    """Publish the edited portfolio README to GitHub profile repo."""
+    username = await github_service.get_username(token)
+    result = await create_or_update_profile_repo_activity(
+        username, body.readme_content, token
+    )
+    return {
+        "status": "published",
+        "profile_url": result["profile_url"],
+        "pr_url": result.get("pr_url"),
+    }

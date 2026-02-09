@@ -4,9 +4,12 @@ import type {
     BatchStatus,
     CommitResponse,
     HealthCheckResponse,
+    PortfolioGenerateRequest,
     PortfolioGenerateResponse,
+    PortfolioPublishResponse,
     PortfolioStatus,
     Repo,
+    SyncResponse,
     WorkflowResponse,
 } from "@/types/api";
 
@@ -70,8 +73,8 @@ export const gardenApi = {
     triggerAnalysis: (repoId: number) =>
         api.post<WorkflowResponse>(`/analyze/${repoId}`),
 
-    /** POST /api/garden/start?limit=N */
-    startBatchAnalysis: (limit: number = 5) =>
+    /** POST /api/garden/start?limit=N (0 = all) */
+    startBatchAnalysis: (limit: number = 0) =>
         api.post<WorkflowResponse>(`/garden/start?limit=${limit}`),
 
     /** GET /api/garden/status/{workflow_id} */
@@ -83,16 +86,26 @@ export const gardenApi = {
         api.post<WorkflowResponse>(`/fix/${repoId}`),
 
     /** POST /api/repos/{repo_id}/commit */
-    commitDocs: (repoId: number, selectedFiles: string[]) =>
+    commitDocs: (repoId: number, selectedFiles: string[], editedContents?: Record<string, string>) =>
         api.post<CommitResponse>(`/repos/${repoId}/commit`, {
             selected_files: selectedFiles,
+            edited_contents: editedContents ?? null,
         }),
 
+    /** POST /api/sync */
+    syncStatus: () => api.post<SyncResponse>("/sync"),
+
     /** POST /api/portfolio/generate */
-    generatePortfolio: () =>
-        api.post<PortfolioGenerateResponse>("/portfolio/generate"),
+    generatePortfolio: (body: PortfolioGenerateRequest) =>
+        api.post<PortfolioGenerateResponse>("/portfolio/generate", body),
 
     /** GET /api/portfolio/status/{workflow_id} */
     getPortfolioStatus: (workflowId: string) =>
         api.get<PortfolioStatus>(`/portfolio/status/${workflowId}`),
+
+    /** POST /api/portfolio/publish */
+    publishPortfolio: (readmeContent: string) =>
+        api.post<PortfolioPublishResponse>("/portfolio/publish", {
+            readme_content: readmeContent,
+        }),
 };

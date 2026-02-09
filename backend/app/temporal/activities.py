@@ -13,7 +13,10 @@ from temporalio import activity
 from github import Auth, Github, GithubException
 
 from app.db.crud import (
+    clear_pending_fix_for_repo,
+    get_repos_with_pending_pr,
     save_draft_proposal,
+    set_repo_status,
     upsert_analysis_result,
     upsert_repository,
     upsert_user,
@@ -73,6 +76,18 @@ def _analyze_repo(repo_full_name: str, access_token: str) -> dict:
 
     last_commit_date = pushed_at or datetime.now(timezone.utc)
 
+    # Check 4: Last Gardener run — scan recent commits for our signature
+    last_gardener_run_at: datetime | None = None
+    try:
+        commits = repo.get_commits()
+        for commit in commits[:20]:  # check last 20 commits
+            msg = commit.commit.message or ""
+            if "\U0001f33f Gardener:" in msg:
+                last_gardener_run_at = commit.commit.author.date
+                break
+    except GithubException:
+        pass  # Non-critical
+
     # Check for an existing Gardener PR (pending fix detection)
     pending_fix_url: str | None = None
     try:
@@ -108,6 +123,7 @@ def _analyze_repo(repo_full_name: str, access_token: str) -> dict:
                 health_score=max(score, 0),
                 issues=issues,
                 pending_fix_url=pending_fix_url,
+                last_gardener_run_at=last_gardener_run_at,
             )
             session.commit()
     except Exception as exc:
@@ -121,6 +137,7 @@ def _analyze_repo(repo_full_name: str, access_token: str) -> dict:
         "issues": issues,
         "last_commit_date": last_commit_date.isoformat(),
         "pending_fix_url": pending_fix_url,
+        "last_gardener_run_at": last_gardener_run_at.isoformat() if last_gardener_run_at else None,
     }
 
 
@@ -136,9 +153,11 @@ async def analyze_repo_health(repo_full_name: str, access_token: str) -> dict:
 
 @activity.defn
 async def fetch_repo_list_activity(access_token: str, limit: int) -> list[dict]:
-    """Fetch the user's repos and return the top N as dicts."""
+    """Fetch the user's repos and return the top N as dicts (0 = all)."""
     repos = await github_service.list_user_repos(access_token)
-    return [r.model_dump() for r in repos[:limit]]
+    if limit > 0:
+        repos = repos[:limit]
+    return [r.model_dump() for r in repos]
 
 
 # ---------------------------------------------------------------------------
@@ -321,10 +340,10 @@ def _create_pull_request(repo_full_name: str, content: str, access_token: str) -
         ref = repo.get_git_ref(f"heads/{target_branch}")
         # Force-update the branch to latest default HEAD so our commit is clean
         ref.edit(sha=default_branch.commit.sha, force=True)
-        print(f"Branch {target_branch} reset to {default_branch_name} HEAD (force-push).")
+        activity.logger.info("Branch %s reset to %s HEAD (force-push).", target_branch, default_branch_name)
     except GithubException:
         repo.create_git_ref(ref=f"refs/heads/{target_branch}", sha=default_branch.commit.sha)
-        print(f"Created new branch {target_branch}")
+        activity.logger.info("Created new branch %s", target_branch)
 
     # 3. Create or Update the README file on that branch
     file_path = "README.md"
@@ -355,7 +374,7 @@ def _create_pull_request(repo_full_name: str, content: str, access_token: str) -
     )
     if existing_prs.totalCount > 0:
         pr = existing_prs[0]
-        print(f"PR already exists: {pr.html_url}")
+        activity.logger.info("PR already exists: %s", pr.html_url)
         g.close()
         return pr.html_url
 
@@ -375,7 +394,7 @@ def _create_pull_request(repo_full_name: str, content: str, access_token: str) -
         return pr_url
     except GithubException as e:
         if e.status == 422 and "No commits between" in str(e.data):
-            print(f"No changes detected between {target_branch} and {default_branch_name}. Skipping PR.")
+            activity.logger.info("No changes detected between %s and %s. Skipping PR.", target_branch, default_branch_name)
             g.close()
             # Return the branch URL or repo URL so the frontend has something to link to
             return f"{repo.html_url}/tree/{target_branch}"
@@ -552,8 +571,205 @@ async def save_draft_proposal_activity(
 
 
 # ---------------------------------------------------------------------------
+# Phase 18: Persistent status updates
+# ---------------------------------------------------------------------------
+
+@activity.defn
+async def set_repo_status_activity(github_repo_id: int, status: str) -> bool:
+    """Set the status field on a repo's analysis result."""
+    def _set() -> bool:
+        with get_session() as session:
+            ok = set_repo_status(session, github_repo_id=github_repo_id, status=status)
+            session.commit()
+            return ok
+    return await asyncio.to_thread(_set)
+
+
+# ---------------------------------------------------------------------------
+# Phase 17: Smart Sync — check PR statuses on GitHub
+# ---------------------------------------------------------------------------
+
+def _sync_pr_status(access_token: str) -> int:
+    """Check GitHub for merged/closed PRs and clear pending_fix_url. Returns count updated."""
+    with get_session() as session:
+        pending = get_repos_with_pending_pr(session)
+
+    if not pending:
+        return 0
+
+    g = Github(auth=Auth.Token(access_token))
+    updated_count = 0
+
+    for repo_full_name, pr_url in pending:
+        try:
+            repo = g.get_repo(repo_full_name)
+            # Extract PR number from URL (e.g. .../pull/42)
+            pr_number = _extract_pr_number(pr_url)
+            if pr_number is None:
+                continue
+
+            pr = repo.get_pull(pr_number)
+            if pr.state != "open":
+                # PR was merged or closed — clear the pending_fix_url
+                with get_session() as session:
+                    clear_pending_fix_for_repo(session, repo_full_name=repo_full_name)
+                    session.commit()
+                updated_count += 1
+        except GithubException:
+            continue  # skip repos we can't access
+
+    g.close()
+    return updated_count
+
+
+def _extract_pr_number(pr_url: str) -> int | None:
+    """Extract pull request number from a GitHub PR URL."""
+    # Handles URLs like https://github.com/owner/repo/pull/42
+    try:
+        parts = pr_url.rstrip("/").split("/")
+        if "pull" in parts:
+            idx = parts.index("pull")
+            return int(parts[idx + 1])
+    except (ValueError, IndexError):
+        pass
+    return None
+
+
+@activity.defn
+async def sync_pr_status_activity(access_token: str) -> int:
+    """Check all pending PRs on GitHub and clear those that are merged/closed."""
+    return await asyncio.to_thread(_sync_pr_status, access_token)
+
+
+# ---------------------------------------------------------------------------
 # Phase 14: Portfolio Architect
 # ---------------------------------------------------------------------------
+
+# Dependency files to look for during portfolio deep scan
+_PORTFOLIO_DEP_FILES = [
+    "package.json",
+    "pyproject.toml",
+    "requirements.txt",
+    "Cargo.toml",
+    "go.mod",
+    "Gemfile",
+    "pom.xml",
+    "build.gradle",
+    "composer.json",
+]
+
+# Map of dependency names → display framework names
+_FRAMEWORK_MAP: dict[str, str] = {
+    # Python
+    "fastapi": "FastAPI",
+    "django": "Django",
+    "flask": "Flask",
+    "temporalio": "Temporal",
+    "sqlmodel": "SQLModel",
+    "sqlalchemy": "SQLAlchemy",
+    "celery": "Celery",
+    "pandas": "Pandas",
+    "numpy": "NumPy",
+    "pytorch": "PyTorch",
+    "torch": "PyTorch",
+    "tensorflow": "TensorFlow",
+    "scikit-learn": "scikit-learn",
+    "langchain": "LangChain",
+    "litellm": "LiteLLM",
+    # JavaScript / TypeScript
+    "next": "Next.js",
+    "react": "React",
+    "vue": "Vue.js",
+    "angular": "Angular",
+    "express": "Express",
+    "tailwindcss": "Tailwind CSS",
+    "@tailwindcss/postcss": "Tailwind CSS",
+    "prisma": "Prisma",
+    "drizzle-orm": "Drizzle",
+    "trpc": "tRPC",
+    "@trpc/server": "tRPC",
+    "axios": "Axios",
+    "@tanstack/react-query": "React Query",
+    "socket.io": "Socket.IO",
+    # Rust
+    "actix-web": "Actix Web",
+    "tokio": "Tokio",
+    "serde": "Serde",
+    # Go (module paths)
+    "gin-gonic/gin": "Gin",
+    "gorilla/mux": "Gorilla Mux",
+}
+
+
+def _extract_frameworks(dependencies: dict[str, str]) -> list[str]:
+    """Parse dependency file contents and extract recognizable framework names."""
+    frameworks: set[str] = set()
+    for _filename, content in dependencies.items():
+        content_lower = content.lower()
+        for dep_key, framework_name in _FRAMEWORK_MAP.items():
+            if dep_key.lower() in content_lower:
+                frameworks.add(framework_name)
+    return sorted(frameworks)
+
+
+def _portfolio_deep_scan(repo_full_name: str, access_token: str) -> dict:
+    """Lightweight deep scan using PyGithub API (no git clone)."""
+    g = Github(auth=Auth.Token(access_token))
+    try:
+        repo = g.get_repo(repo_full_name)
+    except GithubException as exc:
+        raise ValueError(f"Could not fetch repo '{repo_full_name}': {exc.data}")
+
+    # Read README (first 3000 chars)
+    readme_content = ""
+    try:
+        readme = repo.get_readme()
+        readme_content = readme.decoded_content.decode("utf-8", errors="replace")[:3000]
+    except GithubException:
+        pass
+
+    # Read dependency files
+    dep_files: dict[str, str] = {}
+    for dep_file in _PORTFOLIO_DEP_FILES:
+        try:
+            content_file = repo.get_contents(dep_file)
+            if not isinstance(content_file, list):
+                dep_files[dep_file] = content_file.decoded_content.decode("utf-8", errors="replace")[:5000]
+        except GithubException:
+            pass
+
+    # Extract topics
+    topics: list[str] = []
+    try:
+        topics = repo.get_topics()
+    except GithubException:
+        pass
+
+    # Extract frameworks from dependencies
+    frameworks = _extract_frameworks(dep_files)
+
+    g.close()
+
+    return {
+        "full_name": repo.full_name,
+        "name": repo.name,
+        "description": repo.description or "",
+        "html_url": repo.html_url,
+        "language": repo.language or "",
+        "stargazers_count": repo.stargazers_count,
+        "forks_count": repo.forks_count,
+        "topics": topics,
+        "readme_content": readme_content,
+        "dependencies": dep_files,
+        "frameworks": frameworks,
+    }
+
+
+@activity.defn
+async def portfolio_deep_scan_activity(repo_full_name: str, access_token: str) -> dict:
+    """Lightweight deep scan for portfolio — no git clone, uses GitHub API."""
+    return await asyncio.to_thread(_portfolio_deep_scan, repo_full_name, access_token)
+
 
 def _fetch_repos_extended(access_token: str) -> list[dict]:
     """Fetch all owner repos with extended metadata (stars, fork, language, pushed_at)."""
@@ -586,10 +802,13 @@ async def fetch_repos_extended_activity(access_token: str) -> list[dict]:
 async def generate_profile_readme_activity(
     top_repos_json: str,
     username: str,
+    bio: str = "",
+    links_json: str = "{}",
 ) -> str:
     """Generate a GitHub Profile README from the top repos."""
     top_repos: list[dict] = json.loads(top_repos_json)
-    return await llm_service.generate_profile_readme(top_repos, username)
+    links: dict = json.loads(links_json) if links_json else {}
+    return await llm_service.generate_profile_readme(top_repos, username, bio=bio, links=links)
 
 
 def _create_or_update_profile_repo(

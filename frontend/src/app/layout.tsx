@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Repo Gardener",
+  title: "Github Gardener",
   description: "Analyze and fix your GitHub repositories",
 };
 

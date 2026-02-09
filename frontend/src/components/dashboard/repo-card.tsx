@@ -1,10 +1,25 @@
 "use client";
 
 import { useState } from "react";
-import { Lock, Globe, GitPullRequest, AlertCircle, Wrench } from "lucide-react";
+import { Lock, Globe, GitPullRequest, AlertCircle, Wrench, Leaf } from "lucide-react";
 import type { Repo } from "@/types/api";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+
+function timeAgo(dateStr: string): string {
+    const now = Date.now();
+    const then = new Date(dateStr).getTime();
+    const diffMs = now - then;
+    const diffMins = Math.floor(diffMs / 60_000);
+    if (diffMins < 1) return "just now";
+    if (diffMins < 60) return `${diffMins}m ago`;
+    const diffHours = Math.floor(diffMins / 60);
+    if (diffHours < 24) return `${diffHours}h ago`;
+    const diffDays = Math.floor(diffHours / 24);
+    if (diffDays < 30) return `${diffDays}d ago`;
+    const diffMonths = Math.floor(diffDays / 30);
+    return `${diffMonths}mo ago`;
+}
 
 interface RepoCardProps {
     repo: Repo;
@@ -112,7 +127,15 @@ export function RepoCard({ repo, onClick }: RepoCardProps) {
                 </div>
 
                 <div className="mt-4 flex items-center justify-between">
-                    <p className="text-xs text-muted-foreground/70">Updated {lastUpdated}</p>
+                    <div className="flex items-center gap-3">
+                        <p className="text-xs text-muted-foreground/70">Updated {lastUpdated}</p>
+                        {repo.health?.last_gardener_run_at && (
+                            <span className="inline-flex items-center gap-1 text-xs text-green-400/70">
+                                <Leaf className="h-3 w-3" />
+                                Pruned {timeAgo(repo.health.last_gardener_run_at)}
+                            </span>
+                        )}
+                    </div>
                     <div className="flex items-center gap-2">
                         {hasPendingPR && (
                             <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-xs font-medium text-emerald-400">

@@ -29,15 +29,20 @@ export default function DashboardPage() {
     // 3. Fetch repos
     const { data: repos, isLoading, isError, isFetching } = useRepos();
 
-    // 4. Batch analysis
-    const { startBatch, batchStatus, isPolling } = useGardener();
+    // 4. Batch analysis + sync
+    const { startBatch, syncStatus, batchStatus, isPolling } = useGardener();
 
     // 5. Selected repo for detail sheet
     const [selectedRepo, setSelectedRepo] = useState<Repo | null>(null);
     const [activeTab, setActiveTab] = useState("home");
 
     const handleAnalyzeAll = () => {
-        startBatch.mutate(5);
+        startBatch.mutate(repos?.length ?? 100);
+    };
+
+    // Sync: check GitHub for merged/closed PRs
+    const handleSync = () => {
+        syncStatus.mutate();
     };
 
     // Refresh: invalidate cache and refetch fresh data from DB
@@ -90,8 +95,10 @@ export default function DashboardPage() {
                 <DashboardHeader
                     onAnalyzeAll={handleAnalyzeAll}
                     onRefresh={handleRefresh}
+                    onSync={handleSync}
                     isAnalyzing={isPolling || startBatch.isPending}
                     isRefreshing={isFetching && !isLoading}
+                    isSyncing={syncStatus.isPending}
                     isBackendDown={isBackendDown}
                     batchStatus={batchStatus}
                 />

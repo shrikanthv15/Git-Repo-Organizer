@@ -24,6 +24,8 @@ export interface RepoHealth {
     issues: string[];
     last_commit_date: string;
     pending_fix_url: string | null;
+    status: string;
+    last_gardener_run_at: string | null;
 }
 
 /** backend/app/schemas/analysis.py -> BatchStatus */
@@ -55,6 +57,23 @@ export interface CommitResponse {
     pr_url: string;
 }
 
+/** Response from POST /api/sync */
+export interface SyncResponse {
+    status: string;
+    updated_count: number;
+}
+
+/** Request body for POST /api/portfolio/generate */
+export interface PortfolioGenerateRequest {
+    repo_ids: number[];
+    bio?: string;
+    links?: {
+        linkedin?: string;
+        email?: string;
+        website?: string;
+    };
+}
+
 /** Response from POST /api/portfolio/generate */
 export interface PortfolioGenerateResponse {
     workflow_id: string;
@@ -64,9 +83,14 @@ export interface PortfolioGenerateResponse {
 export interface PortfolioStatus {
     stage: string;
     total_repos: number;
-    analyzed: number;
-    top_repos: Record<string, unknown>[];
+    scanned: number;
+    draft_readme: string | null;
+    errors: string[];
+}
+
+/** Response from POST /api/portfolio/publish */
+export interface PortfolioPublishResponse {
+    status: string;
     profile_url: string | null;
     pr_url: string | null;
-    errors: string[];
 }

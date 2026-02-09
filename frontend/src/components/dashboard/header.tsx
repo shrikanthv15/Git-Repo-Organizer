@@ -1,6 +1,6 @@
 "use client";
 
-import { RefreshCw, Zap, WifiOff } from "lucide-react";
+import { RefreshCw, Zap, WifiOff, ArrowDownUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { cn } from "@/lib/utils";
@@ -8,8 +8,10 @@ import { cn } from "@/lib/utils";
 interface HeaderProps {
     onAnalyzeAll: () => void;
     onRefresh: () => void;
+    onSync: () => void;
     isAnalyzing: boolean;
     isRefreshing: boolean;
+    isSyncing: boolean;
     isBackendDown?: boolean;
     batchStatus?: { completed: number; total: number } | null;
 }
@@ -17,8 +19,10 @@ interface HeaderProps {
 export function DashboardHeader({
     onAnalyzeAll,
     onRefresh,
+    onSync,
     isAnalyzing,
     isRefreshing,
+    isSyncing,
     isBackendDown,
     batchStatus
 }: HeaderProps) {
@@ -27,7 +31,7 @@ export function DashboardHeader({
             <div className="flex h-16 items-center justify-between px-6">
                 <div className="flex items-center gap-3">
                     <h1 className="text-xl font-semibold text-foreground">
-                        <span className="bg-gradient-to-r from-green-400 to-emerald-500 bg-clip-text text-transparent">Mission</span> Control
+                        <span className="bg-gradient-to-r from-green-400 to-emerald-500 bg-clip-text text-transparent">GitHub</span> Gardener
                     </h1>
                     {isBackendDown && (
                         <span className="flex items-center gap-1.5 rounded-full bg-yellow-900/20 px-2.5 py-0.5 text-xs font-medium text-yellow-400">
@@ -52,6 +56,19 @@ export function DashboardHeader({
                         title="Refresh data from server"
                     >
                         <RefreshCw className={cn("h-4 w-4", isRefreshing && "animate-spin")} />
+                    </Button>
+
+                    {/* Sync Status button */}
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={onSync}
+                        disabled={isSyncing}
+                        className="border-white/10 bg-transparent text-muted-foreground hover:bg-white/5 hover:text-foreground hover:border-white/20 transition-all duration-300"
+                        title="Sync PR statuses from GitHub"
+                    >
+                        <ArrowDownUp className={cn("mr-2 h-4 w-4", isSyncing && "animate-spin")} />
+                        {isSyncing ? "Syncing..." : "Sync Status"}
                     </Button>
 
                     {/* Analyze All button */}

@@ -250,55 +250,128 @@ async def generate_doc(
 # Phase 14: Portfolio Profile README Generation
 # ---------------------------------------------------------------------------
 
-PROFILE_SYSTEM_PROMPT = (
-    "You are a Career Coach and Developer Branding Expert.\n"
-    "Write a README.md for a GitHub Profile (the special username/username repository).\n\n"
-    f"{MERMAID_RULES}\n\n"
-    "**Required Sections:**\n"
-    "1. **Intro**: A greeting line: 'Hi, I'm [username]. I build [summary of work] "
-    "with [top technologies].' Keep it one short paragraph.\n"
-    "2. **Tech Stack**: Generate a Mermaid Pie Chart showing language distribution.\n"
-    "   Use ```mermaid pie title My Tech Stack``` syntax.\n"
-    "   Each slice label must be a simple string with NO special characters.\n"
-    "3. **Featured Work**: A Markdown table with the top projects.\n"
-    "   Columns: Project | Stack | Description.\n"
-    "   Link each project name to its GitHub URL.\n\n"
-    "**Tone**: Professional, confident, interview-ready. No fluff, no emojis in prose.\n"
-    "Only output the Markdown content, nothing else."
+GOLDEN_PROFILE_SYSTEM_PROMPT = (
+    "You are a Senior Developer Branding Expert at a top-tier tech career firm.\n"
+    "Write a GitHub Profile README.md (the special username/username repository).\n\n"
+    "**Structure (80-150 lines of Markdown):**\n\n"
+    "1. **Header**: A clean `# Hi, I'm [username]` heading followed by a one-sentence "
+    "professional summary. If bio text is provided, incorporate it naturally.\n\n"
+    "2. **Contact Badges** (ONLY if links are provided): Render Shields.io badges for "
+    "LinkedIn, Email, and Website using this exact syntax:\n"
+    "   `[![LinkedIn](https://img.shields.io/badge/LinkedIn-0077B5?style=for-the-badge&logo=linkedin&logoColor=white)](URL)`\n"
+    "   `[![Email](https://img.shields.io/badge/Email-D14836?style=for-the-badge&logo=gmail&logoColor=white)](mailto:EMAIL)`\n"
+    "   `[![Website](https://img.shields.io/badge/Website-000000?style=for-the-badge&logo=About.me&logoColor=white)](URL)`\n"
+    "   Only include badges for links that are actually provided. Skip this section entirely if no links given.\n\n"
+    "3. **Tech Stack Table**: A categorized table with Shields.io badges:\n"
+    "   | Category | Technologies |\n"
+    "   |----------|-------------|\n"
+    "   | Languages | ![Python](https://img.shields.io/badge/Python-3776AB?style=flat-square&logo=python&logoColor=white) ... |\n"
+    "   | Backend | ... |\n"
+    "   | Frontend | ... |\n"
+    "   | DevOps & Tools | ... |\n"
+    "   Derive the technologies from the actual frameworks, languages, and topics detected in the repos. "
+    "Only include categories that have entries. Use `style=flat-square`.\n\n"
+    "4. **Featured Projects**: For each project, write an impact-driven description:\n"
+    "   ### [Project Name](url)\n"
+    "   > One-line architecture summary (e.g., 'Full-stack app with FastAPI + React + Temporal workflows')\n\n"
+    "   - Highlight the architecture and tech choices, not just what the app does.\n"
+    "   - If README excerpts or framework data is available, use it for specificity.\n"
+    "   - Include stars badge: `![Stars](https://img.shields.io/github/stars/owner/repo?style=social)`\n\n"
+    "5. **GitHub Stats Widget**: Include this exact block:\n"
+    "   ```\n"
+    "   ![GitHub Stats](https://github-readme-stats.vercel.app/api?username=USERNAME&show_icons=true&theme=tokyonight&hide_border=true)\n"
+    "   ```\n\n"
+    "**Rules:**\n"
+    "- No emojis in prose text (badges are fine).\n"
+    "- Professional, confident, interview-ready tone.\n"
+    "- Only output the Markdown content, nothing else.\n"
+    "- Do NOT use Mermaid diagrams in profile READMEs."
 )
 
 
 async def generate_profile_readme(
     top_repos: list[dict],
     username: str,
+    bio: str = "",
+    links: dict | None = None,
 ) -> str:
-    """Generate a GitHub Profile README using LangChain."""
+    """Generate a GitHub Profile README using LangChain with rich context."""
     # Build aggregated language stats
     lang_counts: dict[str, int] = {}
+    all_frameworks: set[str] = set()
+    all_topics: set[str] = set()
+
     for repo in top_repos:
         lang = repo.get("language") or "Other"
         lang_counts[lang] = lang_counts.get(lang, 0) + 1
+        all_frameworks.update(repo.get("frameworks", []))
+        all_topics.update(repo.get("topics", []))
 
     lang_summary = ", ".join(
         f"{lang}: {count} project{'s' if count > 1 else ''}"
         for lang, count in sorted(lang_counts.items(), key=lambda x: -x[1])
     )
 
-    repos_context = json.dumps(top_repos, indent=2, default=str)
+    frameworks_summary = ", ".join(sorted(all_frameworks)) if all_frameworks else "None detected"
+    topics_summary = ", ".join(sorted(all_topics)) if all_topics else "None"
+
+    # Build per-repo context with README excerpts
+    repo_sections: list[str] = []
+    for repo in top_repos:
+        section = (
+            f"### {repo.get('full_name', repo.get('name', 'unknown'))}\n"
+            f"- URL: {repo.get('html_url', '')}\n"
+            f"- Language: {repo.get('language', 'N/A')}\n"
+            f"- Stars: {repo.get('stargazers_count', 0)}\n"
+            f"- Forks: {repo.get('forks_count', 0)}\n"
+            f"- Description: {repo.get('description', 'No description')}\n"
+            f"- Frameworks: {', '.join(repo.get('frameworks', [])) or 'N/A'}\n"
+            f"- Topics: {', '.join(repo.get('topics', [])) or 'N/A'}\n"
+        )
+        readme_excerpt = repo.get("readme_content", "")
+        if readme_excerpt:
+            section += f"- README excerpt:\n{readme_excerpt[:1500]}\n"
+        repo_sections.append(section)
+
+    repos_context = "\n".join(repo_sections)
+
+    # Build links context
+    links_context = ""
+    if links:
+        link_parts = []
+        if links.get("linkedin"):
+            link_parts.append(f"LinkedIn: {links['linkedin']}")
+        if links.get("email"):
+            link_parts.append(f"Email: {links['email']}")
+        if links.get("website"):
+            link_parts.append(f"Website: {links['website']}")
+        links_context = "\n".join(link_parts) if link_parts else "No links provided."
+    else:
+        links_context = "No links provided."
+
+    bio_context = bio if bio else "No bio provided."
 
     prompt = ChatPromptTemplate.from_messages([
-        ("system", PROFILE_SYSTEM_PROMPT),
+        ("system", GOLDEN_PROFILE_SYSTEM_PROMPT),
         ("human",
          "GitHub Username: {username}\n\n"
-         "## Aggregated Language Stats\n{lang_summary}\n\n"
-         "## Top Repositories (JSON)\n```json\n{repos_context}\n```\n\n"
+         "## Bio\n{bio_context}\n\n"
+         "## Contact Links\n{links_context}\n\n"
+         "## Languages\n{lang_summary}\n\n"
+         "## Detected Frameworks\n{frameworks_summary}\n\n"
+         "## Topics\n{topics_summary}\n\n"
+         "## Featured Repositories\n{repos_context}\n\n"
          "Generate the profile README now."),
     ])
 
     chain = prompt | _get_chat_model()
     response = await chain.ainvoke({
         "username": username,
+        "bio_context": bio_context,
+        "links_context": links_context,
         "lang_summary": lang_summary,
+        "frameworks_summary": frameworks_summary,
+        "topics_summary": topics_summary,
         "repos_context": repos_context,
     })
     return response.content

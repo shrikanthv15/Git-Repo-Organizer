@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { gardenApi } from "@/services/api";
-import type { Repo, BatchStatus, PortfolioStatus } from "@/types/api";
+import type { Repo, BatchStatus, PortfolioStatus, PortfolioGenerateRequest, PortfolioPublishResponse } from "@/types/api";
 
 // -------------------------------------------------------------------
 // useHealthCheck — connectivity probe
@@ -19,7 +19,7 @@ export function useHealthCheck() {
 }
 
 // -------------------------------------------------------------------
-// useRepos — replaces the old lib/use-repos.ts (no mock data)
+// useRepos — smart polling: only poll when repos are actively drafting
 // -------------------------------------------------------------------
 export function useRepos() {
     return useQuery({
@@ -27,6 +27,15 @@ export function useRepos() {
         queryFn: async (): Promise<Repo[]> => {
             const { data } = await gardenApi.getRepos();
             return Array.isArray(data) ? data : [];
+        },
+        staleTime: 60_000, // 60s — idle repos don't need constant refetch
+        refetchInterval: (query) => {
+            // Smart poll: if any repo is drafting, poll every 3s; otherwise stop
+            const repos = query.state.data;
+            const hasDrafting = repos?.some(
+                (r) => r.health?.status === "drafting_docs"
+            );
+            return hasDrafting ? 3_000 : false;
         },
     });
 }
@@ -58,7 +67,7 @@ export function useGardener() {
 
     // Start Batch Mutation
     const startBatch = useMutation({
-        mutationFn: async (limit: number = 5) => {
+        mutationFn: async (limit: number = 0) => {
             const { data } = await gardenApi.startBatchAnalysis(limit);
             return data.workflow_id;
         },
@@ -159,16 +168,18 @@ export function useGardener() {
         },
     });
 
-    // Commit Mutation — approve selected draft files, creates PR
+    // Commit Mutation — approve selected draft files (with optional edits), creates PR
     const commitDocs = useMutation({
         mutationFn: async ({
             repoId,
             selectedFiles,
+            editedContents,
         }: {
             repoId: number;
             selectedFiles: string[];
+            editedContents?: Record<string, string>;
         }) => {
-            const { data } = await gardenApi.commitDocs(repoId, selectedFiles);
+            const { data } = await gardenApi.commitDocs(repoId, selectedFiles, editedContents);
             return { repoId, prUrl: data.pr_url };
         },
         onSuccess: ({ repoId, prUrl }) => {
@@ -188,6 +199,17 @@ export function useGardener() {
                     return repo;
                 });
             });
+        },
+    });
+
+    // Sync Mutation — check GitHub for merged/closed PRs
+    const syncStatus = useMutation({
+        mutationFn: async () => {
+            const { data } = await gardenApi.syncStatus();
+            return data;
+        },
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ["repos"] });
         },
     });
 
@@ -238,6 +260,7 @@ export function useGardener() {
         triggerFix,
         triggerSingleAnalysis,
         commitDocs,
+        syncStatus,
         batchStatus,
         isPolling: !!currentWorkflowId && !isBatchComplete,
         getFixStatus,
@@ -245,20 +268,22 @@ export function useGardener() {
 }
 
 // -------------------------------------------------------------------
-// usePortfolio — trigger and poll the Portfolio Architect workflow
+// usePortfolio — Portfolio Studio: generate, poll, publish
 // -------------------------------------------------------------------
 export function usePortfolio() {
     const [workflowId, setWorkflowId] = useState<string | null>(null);
     const [isComplete, setIsComplete] = useState(false);
+    const [publishResult, setPublishResult] = useState<PortfolioPublishResponse | null>(null);
 
     const generate = useMutation({
-        mutationFn: async () => {
-            const { data } = await gardenApi.generatePortfolio();
+        mutationFn: async (body: PortfolioGenerateRequest) => {
+            const { data } = await gardenApi.generatePortfolio(body);
             return data.workflow_id;
         },
         onSuccess: (wfId) => {
             setWorkflowId(wfId);
             setIsComplete(false);
+            setPublishResult(null);
         },
     });
 
@@ -275,14 +300,33 @@ export function usePortfolio() {
 
     useEffect(() => {
         if (!status) return;
-        if (status.stage === "complete" || status.stage === "failed") {
+        if (status.stage === "draft_ready" || status.stage === "failed") {
             setIsComplete(true);
         }
     }, [status]);
 
+    const publish = useMutation({
+        mutationFn: async (readmeContent: string) => {
+            const { data } = await gardenApi.publishPortfolio(readmeContent);
+            return data;
+        },
+        onSuccess: (result) => {
+            setPublishResult(result);
+        },
+    });
+
+    const reset = useCallback(() => {
+        setWorkflowId(null);
+        setIsComplete(false);
+        setPublishResult(null);
+    }, []);
+
     return {
         generate,
         status,
+        publish,
+        publishResult,
         isPolling: !!workflowId && !isComplete,
+        reset,
     };
 }

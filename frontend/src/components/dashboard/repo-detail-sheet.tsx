@@ -41,12 +41,15 @@ export function RepoDetailSheet({ repo, open, onClose }: RepoDetailSheetProps) {
     if (!repo) return null;
 
     const repoId = repo.id;
-    const fixStatus = getFixStatus(repoId);
+    const localFixStatus = getFixStatus(repoId);
     const health = repo.health;
     const score = health?.health_score ?? null;
     const hasPendingFix = !!health?.pending_fix_url;
     const hasDraft = !!(repo.draft_proposal && Object.keys(repo.draft_proposal).length > 0);
     const issues = health?.issues ?? [];
+    const dbStatus = health?.status ?? "idle";
+    // Trust DB status: if drafting_docs, show progress even after refresh
+    const isDrafting = localFixStatus === "pending" || dbStatus === "drafting_docs";
 
     const handleFix = useCallback(() => {
         triggerFix.mutate(repoId);
@@ -136,8 +139,8 @@ export function RepoDetailSheet({ repo, open, onClose }: RepoDetailSheetProps) {
                     {/* Action Buttons */}
                     {!hasDraft && (
                         <div className="flex flex-col gap-3">
-                            {/* Fix in progress */}
-                            {fixStatus === "pending" && (
+                            {/* Fix in progress (persisted — survives refresh) */}
+                            {isDrafting && (
                                 <div className="flex items-center gap-3 rounded-xl border border-green-500/20 bg-green-500/10 p-4">
                                     <Loader2 className="h-5 w-5 animate-spin text-green-400" />
                                     <div>
@@ -148,7 +151,7 @@ export function RepoDetailSheet({ repo, open, onClose }: RepoDetailSheetProps) {
                             )}
 
                             {/* Fix done - draft ready */}
-                            {fixStatus === "done" && (
+                            {localFixStatus === "done" && (
                                 <div className="flex items-center gap-3 rounded-xl border border-blue-500/20 bg-blue-500/10 p-4">
                                     <CheckCircle2 className="h-5 w-5 text-blue-400" />
                                     <div>
@@ -159,7 +162,7 @@ export function RepoDetailSheet({ repo, open, onClose }: RepoDetailSheetProps) {
                             )}
 
                             {/* Pending PR on GitHub */}
-                            {hasPendingFix && health?.pending_fix_url && !fixStatus && (
+                            {hasPendingFix && health?.pending_fix_url && !isDrafting && (
                                 <>
                                     <div className="flex items-center gap-3 rounded-xl border border-purple-500/20 bg-purple-500/10 p-4">
                                         <GitPullRequest className="h-5 w-5 text-purple-400" />
@@ -180,8 +183,8 @@ export function RepoDetailSheet({ repo, open, onClose }: RepoDetailSheetProps) {
                                 </>
                             )}
 
-                            {/* Score < 100, offer auto-fix */}
-                            {score !== null && score < 100 && !hasPendingFix && !fixStatus && (
+                            {/* Auto-fix button — always visible when not mid-fix */}
+                            {score !== null && !isDrafting && (
                                 <Button
                                     onClick={handleFix}
                                     disabled={triggerFix.isPending}
@@ -195,14 +198,14 @@ export function RepoDetailSheet({ repo, open, onClose }: RepoDetailSheetProps) {
                                     ) : (
                                         <>
                                             <Wrench className="mr-2 h-4 w-4" />
-                                            Auto-Fix Repository
+                                            {hasPendingFix ? "Re-Fix Repository" : "Auto-Fix Repository"}
                                         </>
                                     )}
                                 </Button>
                             )}
 
-                            {/* No health data, offer analysis */}
-                            {score === null && !fixStatus && (
+                            {/* Analyze button — always visible */}
+                            {!isDrafting && (
                                 <Button
                                     onClick={handleAnalyze}
                                     disabled={triggerSingleAnalysis.isPending}
@@ -217,7 +220,7 @@ export function RepoDetailSheet({ repo, open, onClose }: RepoDetailSheetProps) {
                                     ) : (
                                         <>
                                             <Zap className="mr-2 h-4 w-4" />
-                                            Analyze Repository
+                                            {score !== null ? "Re-Analyze" : "Analyze Repository"}
                                         </>
                                     )}
                                 </Button>
@@ -242,7 +245,7 @@ export function RepoDetailSheet({ repo, open, onClose }: RepoDetailSheetProps) {
     );
 }
 
-// Draft proposal review section
+// Draft proposal review section with editable markdown editor
 function DraftProposalSection({
     repoId,
     draft,
@@ -259,6 +262,8 @@ function DraftProposalSection({
     const [selected, setSelected] = useState<Record<string, boolean>>(() =>
         Object.fromEntries(filenames.map((f) => [f, true]))
     );
+    const [editedContents, setEditedContents] = useState<Record<string, string>>(() => ({ ...draft }));
+    const [editorMode, setEditorMode] = useState<"edit" | "preview">("edit");
     const [committed, setCommitted] = useState(false);
     const [prUrl, setPrUrl] = useState<string | null>(null);
 
@@ -266,12 +271,16 @@ function DraftProposalSection({
         setSelected((prev) => ({ ...prev, [filename]: !prev[filename] }));
     };
 
+    const handleContentChange = (filename: string, content: string) => {
+        setEditedContents((prev) => ({ ...prev, [filename]: content }));
+    };
+
     const selectedFiles = filenames.filter((f) => selected[f]);
 
     const handleCommit = () => {
         if (selectedFiles.length === 0) return;
         commitDocs.mutate(
-            { repoId, selectedFiles },
+            { repoId, selectedFiles, editedContents },
             {
                 onSuccess: ({ prUrl: url }) => {
                     setCommitted(true);
@@ -320,7 +329,7 @@ function DraftProposalSection({
                     ) : (
                         <>
                             <Check className="mr-1.5 h-3 w-3" />
-                            Approve ({selectedFiles.length})
+                            Commit Changes ({selectedFiles.length})
                         </>
                     )}
                 </Button>
@@ -350,34 +359,73 @@ function DraftProposalSection({
                 ))}
             </div>
 
-            {/* Toggle + Preview */}
+            {/* Toggle + Editor/Preview */}
             <div className="rounded-xl border border-white/10 bg-secondary/50 p-3">
                 <div className="mb-3 flex items-center justify-between">
-                    <span className="text-xs text-muted-foreground">Include this file</span>
-                    <button
-                        onClick={() => toggleFile(activeTab)}
-                        className={cn(
-                            "relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full transition-colors",
-                            selected[activeTab] ? "bg-green-500" : "bg-white/20"
-                        )}
-                    >
-                        <span
+                    <div className="flex items-center gap-2">
+                        <span className="text-xs text-muted-foreground">Include</span>
+                        <button
+                            onClick={() => toggleFile(activeTab)}
                             className={cn(
-                                "inline-block h-4 w-4 translate-y-0.5 rounded-full bg-white shadow transition-transform",
-                                selected[activeTab] ? "translate-x-4" : "translate-x-0.5"
+                                "relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full transition-colors",
+                                selected[activeTab] ? "bg-green-500" : "bg-white/20"
                             )}
-                        />
-                    </button>
+                        >
+                            <span
+                                className={cn(
+                                    "inline-block h-4 w-4 translate-y-0.5 rounded-full bg-white shadow transition-transform",
+                                    selected[activeTab] ? "translate-x-4" : "translate-x-0.5"
+                                )}
+                            />
+                        </button>
+                    </div>
+                    {/* Edit / Preview toggle */}
+                    <div className="flex rounded-lg border border-white/10 overflow-hidden">
+                        <button
+                            onClick={() => setEditorMode("edit")}
+                            className={cn(
+                                "px-2.5 py-1 text-xs font-medium transition-colors",
+                                editorMode === "edit"
+                                    ? "bg-white/10 text-foreground"
+                                    : "text-muted-foreground hover:text-foreground"
+                            )}
+                        >
+                            Edit
+                        </button>
+                        <button
+                            onClick={() => setEditorMode("preview")}
+                            className={cn(
+                                "px-2.5 py-1 text-xs font-medium transition-colors",
+                                editorMode === "preview"
+                                    ? "bg-white/10 text-foreground"
+                                    : "text-muted-foreground hover:text-foreground"
+                            )}
+                        >
+                            Preview
+                        </button>
+                    </div>
                 </div>
 
-                <ScrollArea className="h-48">
-                    <div className={cn(
-                        "prose prose-sm dark:prose-invert max-w-none text-xs",
-                        !selected[activeTab] && "opacity-50"
-                    )}>
-                        <ReactMarkdown>{draft[activeTab] ?? ""}</ReactMarkdown>
-                    </div>
-                </ScrollArea>
+                {editorMode === "edit" ? (
+                    <textarea
+                        value={editedContents[activeTab] ?? ""}
+                        onChange={(e) => handleContentChange(activeTab, e.target.value)}
+                        className={cn(
+                            "h-56 w-full resize-none rounded-lg border border-white/10 bg-background/50 p-3 font-mono text-xs text-foreground placeholder:text-muted-foreground focus:border-green-500/50 focus:outline-none focus:ring-1 focus:ring-green-500/30",
+                            !selected[activeTab] && "opacity-50"
+                        )}
+                        spellCheck={false}
+                    />
+                ) : (
+                    <ScrollArea className="h-56">
+                        <div className={cn(
+                            "prose prose-sm dark:prose-invert max-w-none text-xs",
+                            !selected[activeTab] && "opacity-50"
+                        )}>
+                            <ReactMarkdown>{editedContents[activeTab] ?? ""}</ReactMarkdown>
+                        </div>
+                    </ScrollArea>
+                )}
             </div>
 
             {commitDocs.isError && (

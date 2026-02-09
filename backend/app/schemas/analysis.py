@@ -9,6 +9,8 @@ class RepoHealth(BaseModel):
     issues: list[str]
     last_commit_date: datetime
     pending_fix_url: str | None = None
+    status: str = "idle"
+    last_gardener_run_at: datetime | None = None
 
 
 class BatchInput(BaseModel):
