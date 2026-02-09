@@ -38,7 +38,21 @@ TASK_QUEUE = "gardener-queue"
 
 
 async def main():
-    client = await Client.connect(settings.TEMPORAL_ADDRESS)
+    # --- START OF CHANGE: RETRY LOOP ---
+    client = None
+    retries = 0
+    while not client:
+        try:
+            logger.info(f"Attempting to connect to Temporal at {settings.TEMPORAL_ADDRESS}...")
+            client = await Client.connect(settings.TEMPORAL_ADDRESS)
+            logger.info("Successfully connected to Temporal!")
+        except Exception as e:
+            retries += 1
+            wait_time = min(2 ** retries, 30)  # Wait 2s, 4s, 8s... max 30s
+            logger.error(f"Failed to connect to Temporal (Attempt {retries}): {e}")
+            logger.info(f"Retrying in {wait_time} seconds...")
+            await asyncio.sleep(wait_time)
+    # --- END OF CHANGE ---
 
     worker = Worker(
         client,
