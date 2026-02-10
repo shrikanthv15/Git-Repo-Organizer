@@ -28,11 +28,9 @@ services:
       - gardener-network
 
   # ── Temporal Server ─────────────────────────────
-  # TODO: TEMPORARY DEBUG — remove `command: sleep 3600` after inspecting env vars
   temporal:
     image: temporalio/auto-setup:latest
     restart: always
-    command: ["sleep", "3600"]
     environment:
       DB: postgres12
       DB_PORT: 5432
