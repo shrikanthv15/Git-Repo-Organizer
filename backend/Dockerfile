@@ -6,6 +6,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /
 # Install uv
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
 
+# Force Python to flush stdout/stderr immediately (critical for Docker log visibility)
+ENV PYTHONUNBUFFERED=1
+
 WORKDIR /app
 
 # Cache dependency installation — use requirements.txt so adding new

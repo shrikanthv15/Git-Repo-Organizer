@@ -1,9 +1,17 @@
 import asyncio
 import logging
+import sys
 
 from temporalio.client import Client
 from temporalio.worker import Worker
 
+# Configure root logger BEFORE anything else — without this,
+# all logger.info/error calls silently go nowhere in Docker.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    stream=sys.stdout,
+)
 logger = logging.getLogger(__name__)
 
 from app.core.config import settings
