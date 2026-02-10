@@ -120,6 +120,7 @@ services:
       - backend
     networks:
       - gardener-network
+      - coolify
 
 volumes:
   pgdata:
@@ -127,3 +128,5 @@ volumes:
 networks:
   gardener-network:
     driver: bridge
+  coolify:               # <--- ADD THIS BLOCK
+      external: true
