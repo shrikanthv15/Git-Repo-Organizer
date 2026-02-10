@@ -31,15 +31,27 @@ services:
   temporal:
     image: temporalio/auto-setup:latest
     restart: always
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        export BIND_ON_IP=0.0.0.0
+        export TEMPORAL_BROADCAST_ADDRESS=$$(hostname -i | awk '{print $$1}')
+        echo "Waiting for PostgreSQL at $${POSTGRES_SEEDS}:$${DB_PORT}..."
+        until nc -z "$${POSTGRES_SEEDS}" "$${DB_PORT}" 2>/dev/null; do
+          sleep 2
+        done
+        echo "PostgreSQL is ready."
+        echo "Generating Temporal config..."
+        dockerize -template /etc/temporal/config/config_template.yaml:/etc/temporal/config/docker.yaml
+        echo "Starting Temporal server..."
+        exec temporal-server --env docker start --service=history --service=matching --service=frontend --service=worker
     environment:
-      DB: postgres12_pgx
+      DB: postgres12
       DB_PORT: 5432
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PWD: ${POSTGRES_PASSWORD}
       POSTGRES_SEEDS: postgres
-      SKIP_DB_CREATE: "true"
-      SKIP_SCHEMA_SETUP: "true"
-      SKIP_DEFAULT_NAMESPACE_CREATION: "true"
     expose:
       - "7233"
     depends_on:
