@@ -28,11 +28,9 @@ services:
       - gardener-network
 
   # ── Temporal Server ─────────────────────────────
-  # TODO: TEMPORARY DEBUG — remove entrypoint override after diagnosis
   temporal:
     image: temporalio/auto-setup:latest
     restart: always
-    entrypoint: ["sh", "-c", "while true; do sleep 3600; done"]
     environment:
       DB: postgres12
       DB_PORT: 5432
@@ -40,6 +38,8 @@ services:
       POSTGRES_PWD: ${POSTGRES_PASSWORD}
       POSTGRES_SEEDS: postgres
       SKIP_DB_CREATE: "true"
+      SKIP_SCHEMA_SETUP: "true"
+      SKIP_DEFAULT_NAMESPACE_CREATION: "true"
     expose:
       - "7233"
     depends_on:
