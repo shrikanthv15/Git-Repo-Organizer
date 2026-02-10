@@ -32,7 +32,7 @@ services:
     image: temporalio/auto-setup:latest
     restart: always
     environment:
-      DB: postgres12
+      DB: postgres12_pgx
       DB_PORT: 5432
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PWD: ${POSTGRES_PASSWORD}
