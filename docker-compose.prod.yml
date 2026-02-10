@@ -31,27 +31,6 @@ services:
   temporal:
     image: temporalio/auto-setup:latest
     restart: always
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - |
-        set -e
-        export BIND_ON_IP=0.0.0.0
-        export TEMPORAL_BROADCAST_ADDRESS=$$(hostname -i | awk '{print $$1}')
-        echo "Waiting for PostgreSQL at $${POSTGRES_SEEDS}:$${DB_PORT}..."
-        until nc -z "$${POSTGRES_SEEDS}" "$${DB_PORT}" 2>/dev/null; do
-          sleep 2
-        done
-        echo "PostgreSQL is ready."
-        echo "Setting up temporal schemas..."
-        temporal-sql-tool --plugin postgres12 --ep "$${POSTGRES_SEEDS}" --port "$${DB_PORT}" --user "$${POSTGRES_USER}" --password "$${POSTGRES_PWD}" --db temporal setup-schema -v 0.0
-        temporal-sql-tool --plugin postgres12 --ep "$${POSTGRES_SEEDS}" --port "$${DB_PORT}" --user "$${POSTGRES_USER}" --password "$${POSTGRES_PWD}" --db temporal update-schema -d /etc/temporal/schema/postgresql/v12/temporal/versioned
-        echo "Setting up temporal_visibility schemas..."
-        temporal-sql-tool --plugin postgres12 --ep "$${POSTGRES_SEEDS}" --port "$${DB_PORT}" --user "$${POSTGRES_USER}" --password "$${POSTGRES_PWD}" --db temporal_visibility setup-schema -v 0.0
-        temporal-sql-tool --plugin postgres12 --ep "$${POSTGRES_SEEDS}" --port "$${DB_PORT}" --user "$${POSTGRES_USER}" --password "$${POSTGRES_PWD}" --db temporal_visibility update-schema -d /etc/temporal/schema/postgresql/v12/visibility/versioned
-        echo "Generating Temporal config..."
-        dockerize -template /etc/temporal/config/config_template.yaml:/etc/temporal/config/docker.yaml
-        echo "Starting Temporal server..."
-        exec temporal-server --env docker start --service=history --service=matching --service=frontend --service=worker
     environment:
       DB: postgres12
       DB_PORT: 5432
