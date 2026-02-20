@@ -1,7 +1,25 @@
 import { useState, useEffect, useCallback } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import axios from "axios";
 import { gardenApi } from "@/services/api";
 import type { Repo, BatchStatus, PortfolioStatus, PortfolioGenerateRequest, PortfolioPublishResponse } from "@/types/api";
+
+// -------------------------------------------------------------------
+// Polling safeguards
+// -------------------------------------------------------------------
+const MAX_POLL_ATTEMPTS = 60;
+
+/** Exponential backoff: 1s → 2s → 4s → 8s (cap), stepping every 5 attempts */
+function backoffDelay(attempt: number): number {
+    return Math.min(1000 * Math.pow(2, Math.floor(attempt / 5)), 8000);
+}
+
+/** True for HTTP 404, 500, or any non-retryable server error */
+function isTerminalHttpError(error: unknown): boolean {
+    if (!axios.isAxiosError(error)) return false;
+    const status = error.response?.status;
+    return status === 404 || status === 500 || status === 502 || status === 503;
+}
 
 // -------------------------------------------------------------------
 // useHealthCheck — connectivity probe
@@ -30,6 +48,7 @@ export function useRepos() {
         },
         staleTime: 60_000, // 60s — idle repos don't need constant refetch
         refetchInterval: (query) => {
+            if (query.state.status === "error") return false;
             // Smart poll: if any repo is drafting, poll every 3s; otherwise stop
             const repos = query.state.data;
             const hasDrafting = repos?.some(
@@ -78,7 +97,7 @@ export function useGardener() {
     });
 
     // Polling Query for batch status
-    const { data: batchStatus } = useQuery({
+    const { data: batchStatus, error: batchError } = useQuery({
         queryKey: ["batchStatus", currentWorkflowId],
         queryFn: async (): Promise<BatchStatus | null> => {
             if (!currentWorkflowId) return null;
@@ -86,11 +105,22 @@ export function useGardener() {
             return data;
         },
         enabled: !!currentWorkflowId && !isBatchComplete,
-        refetchInterval: 2000,
+        retry: false,
+        refetchInterval: (query) => {
+            if (query.state.status === "error") return false;
+            if (query.state.dataUpdateCount > MAX_POLL_ATTEMPTS) return false;
+            return 2000;
+        },
     });
 
     // Merge batch results into the repos cache
     useEffect(() => {
+        // Stop polling on HTTP error (404, 500, network failure)
+        if (batchError) {
+            setIsBatchComplete(true);
+            setCurrentWorkflowId(null);
+            return;
+        }
         if (!batchStatus) return;
 
         if (batchStatus.completed === batchStatus.total && batchStatus.total > 0) {
@@ -109,7 +139,7 @@ export function useGardener() {
                 });
             });
         }
-    }, [batchStatus, queryClient]);
+    }, [batchStatus, batchError, queryClient]);
 
     // Fix Mutation (Janitor) — now polls for draft_proposal instead of pending_fix_url
     const triggerFix = useMutation({
@@ -119,10 +149,9 @@ export function useGardener() {
             // Poll DB for draft_proposal
             let foundDraft: Record<string, string> | null = null;
             let attempts = 0;
-            const maxAttempts = 90;
 
-            while (!foundDraft && attempts < maxAttempts) {
-                await new Promise((r) => setTimeout(r, 1000));
+            while (!foundDraft && attempts < MAX_POLL_ATTEMPTS) {
+                await new Promise((r) => setTimeout(r, backoffDelay(attempts)));
                 attempts++;
                 try {
                     const res = await gardenApi.getRepos();
@@ -134,11 +163,14 @@ export function useGardener() {
                         break;
                     }
                 } catch (e) {
-                    console.error("Polling error", e);
+                    if (isTerminalHttpError(e)) {
+                        throw new Error(`Janitor failed: server returned ${(e as any).response?.status}`);
+                    }
+                    console.error("Polling error (attempt %d/%d)", attempts, MAX_POLL_ATTEMPTS, e);
                 }
             }
 
-            if (!foundDraft) throw new Error("Janitor timeout: draft not ready after 90s");
+            if (!foundDraft) throw new Error(`Janitor timeout: draft not ready after ${MAX_POLL_ATTEMPTS} attempts`);
 
             return { repoId, workflowId: data.workflow_id, draft: foundDraft };
         },
@@ -217,11 +249,11 @@ export function useGardener() {
     const triggerSingleAnalysis = useMutation({
         mutationFn: async (repoId: number) => {
             const { data } = await gardenApi.triggerAnalysis(repoId);
-            // Poll for result
+            // Poll for result with backoff + terminal error bailout
             let result = null;
             let attempts = 0;
-            while (!result && attempts < 30) {
-                await new Promise((r) => setTimeout(r, 1000));
+            while (!result && attempts < MAX_POLL_ATTEMPTS) {
+                await new Promise((r) => setTimeout(r, backoffDelay(attempts)));
                 attempts++;
                 try {
                     const status = await gardenApi.getBatchStatus(data.workflow_id);
@@ -230,10 +262,13 @@ export function useGardener() {
                         break;
                     }
                 } catch (e) {
-                    console.error("Polling error", e);
+                    if (isTerminalHttpError(e)) {
+                        throw new Error(`Analysis failed: server returned ${(e as any).response?.status}`);
+                    }
+                    console.error("Polling error (attempt %d/%d)", attempts, MAX_POLL_ATTEMPTS, e);
                 }
             }
-            if (!result) throw new Error("Analysis timeout");
+            if (!result) throw new Error(`Analysis timeout after ${MAX_POLL_ATTEMPTS} attempts`);
             return { repoId, health: result };
         },
         onSuccess: ({ repoId, health }) => {
@@ -287,7 +322,7 @@ export function usePortfolio() {
         },
     });
 
-    const { data: status } = useQuery({
+    const { data: status, error: portfolioError } = useQuery({
         queryKey: ["portfolioStatus", workflowId],
         queryFn: async (): Promise<PortfolioStatus | null> => {
             if (!workflowId) return null;
@@ -295,15 +330,24 @@ export function usePortfolio() {
             return data;
         },
         enabled: !!workflowId && !isComplete,
-        refetchInterval: 2000,
+        retry: false,
+        refetchInterval: (query) => {
+            if (query.state.status === "error") return false;
+            if (query.state.dataUpdateCount > MAX_POLL_ATTEMPTS) return false;
+            return 2000;
+        },
     });
 
     useEffect(() => {
+        if (portfolioError) {
+            setIsComplete(true);
+            return;
+        }
         if (!status) return;
         if (status.stage === "draft_ready" || status.stage === "failed") {
             setIsComplete(true);
         }
-    }, [status]);
+    }, [status, portfolioError]);
 
     const publish = useMutation({
         mutationFn: async (readmeContent: string) => {
