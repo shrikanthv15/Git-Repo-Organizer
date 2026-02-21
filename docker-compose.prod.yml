@@ -1,8 +1,10 @@
 # =============================================================================
 # GitHub Gardener — Production Docker Compose (Coolify)
 # =============================================================================
-# Coolify deploys via Traefik reverse proxy. Services use `expose` (internal)
-# instead of `ports` (host-mapped) so Traefik routes traffic by domain name.
+# Coolify deploys via its reverse proxy (Caddy/Traefik). Services use `expose`
+# (internal) instead of `ports` (host-mapped).
+# All services communicate via Docker Compose's default project network.
+# Coolify auto-attaches the frontend to its proxy network for domain routing.
 # Set all environment variables in Coolify's UI or via .env on the server.
 # =============================================================================
 
@@ -24,8 +26,6 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
-    networks:
-      - gardener-network
 
   # ── Temporal Server ─────────────────────────────
   temporal:
@@ -49,8 +49,6 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    networks:
-      - gardener-network
 
   # ── Temporal UI (optional — expose internally for admin access) ──
   temporal-ui:
@@ -64,8 +62,6 @@ services:
     depends_on:
       temporal:
         condition: service_healthy
-    networks:
-      - gardener-network
 
   # ── Backend (FastAPI) ───────────────────────────
   backend:
@@ -89,8 +85,6 @@ services:
         condition: service_healthy
       temporal:
         condition: service_healthy
-    networks:
-      - gardener-network
 
   # ── Temporal Worker ─────────────────────────────
   worker:
@@ -112,8 +106,6 @@ services:
         condition: service_healthy
       temporal:
         condition: service_healthy
-    networks:
-      - gardener-network
 
   # ── Frontend (Next.js) ──────────────────────────
   frontend:
@@ -133,15 +125,6 @@ services:
       start_period: 30s
     depends_on:
       - backend
-    networks:
-      - gardener-network
-      - coolify
 
 volumes:
   pgdata:
-
-networks:
-  gardener-network:
-    driver: bridge
-  coolify:
-    external: true
