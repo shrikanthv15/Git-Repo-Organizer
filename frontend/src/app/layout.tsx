@@ -16,9 +16,7 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "GitHub Gardener",
   description: "Analyze and fix your GitHub repositories",
-  icons: {
-    icon: "/favicon-logo.jpg",
-  },
+  icons: { icon: "/logo.png" },
 };
 
 export default function RootLayout({

@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { RefreshCw, Zap, WifiOff, ArrowDownUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -30,6 +31,7 @@ export function DashboardHeader({
         <header className="relative z-10 flex flex-col border-b border-white/10 bg-card/50 backdrop-blur-sm">
             <div className="flex h-16 items-center justify-between px-6">
                 <div className="flex items-center gap-3">
+                    <Image src="/logo.png" alt="" width={28} height={28} className="h-7 w-7 shrink-0 object-contain" aria-hidden />
                     <h1 className="text-xl font-semibold text-foreground">
                         <span className="bg-gradient-to-r from-green-400 to-emerald-500 bg-clip-text text-transparent">GitHub</span> Gardener
                     </h1>

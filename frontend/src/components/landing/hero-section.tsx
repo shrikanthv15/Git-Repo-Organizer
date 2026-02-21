@@ -1,7 +1,7 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { ArrowRight, Play, Github } from "lucide-react";
+import { ArrowRight, Github } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { CodeTerminal } from "./code-terminal";
 
@@ -76,14 +76,6 @@ export function HeroSection() {
                 <Github className="mr-2 h-4 w-4" />
                 Start Gardening
                 <ArrowRight className="ml-2 h-4 w-4 transition-transform group-hover:translate-x-1" />
-              </Button>
-              <Button
-                size="lg"
-                variant="outline"
-                className="border-white/20 bg-transparent hover:bg-white/5 text-foreground"
-              >
-                <Play className="mr-2 h-4 w-4" />
-                View Demo
               </Button>
             </motion.div>
 
