@@ -41,7 +41,7 @@ services:
     expose:
       - "7233"
     healthcheck:
-      test: ["CMD-SHELL", "nc -z localhost 7233"]
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 7233"]
       interval: 10s
       timeout: 5s
       retries: 30
@@ -126,7 +126,7 @@ services:
     expose:
       - "3000"
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:3000 || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000 || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 10
