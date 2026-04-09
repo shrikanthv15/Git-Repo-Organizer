@@ -1,9 +1,14 @@
 import json
+import logging
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from temporalio.client import Client
+
+logger = logging.getLogger(__name__)
+
+MAX_BATCH_LIMIT = 100  # Cap batch analysis to prevent runaway workflows
 
 from app.core.config import settings
 from app.db.crud import get_draft_proposal, get_latest_analysis_for_repos, save_draft_proposal, set_repo_status
@@ -83,6 +88,7 @@ async def list_repos(token: str = Depends(get_current_token)):
         with get_session() as session:
             analysis_map = get_latest_analysis_for_repos(session, repo_ids)
     except Exception:
+        logger.exception("Failed to load analysis data for %d repos", len(repo_ids))
         analysis_map = {}
 
     enriched: list[Repo] = []
@@ -127,7 +133,7 @@ async def analyze_repo(repo_id: int, token: str = Depends(get_current_token)):
 @router.post("/garden/start")
 async def start_garden(
     token: str = Depends(get_current_token),
-    limit: int = 0,
+    limit: int = Query(default=0, ge=0, le=MAX_BATCH_LIMIT),
 ):
     client = await get_temporal_client()
     workflow_id = f"garden-{uuid.uuid4()}"

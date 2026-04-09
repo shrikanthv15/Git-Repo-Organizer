@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { motion } from "framer-motion";
 import { Github, Twitter, Linkedin } from "lucide-react";
 
@@ -43,9 +44,13 @@ export function Footer() {
           {/* Brand */}
           <div className="lg:col-span-1">
             <div className="flex items-center gap-2 mb-4">
-              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-green-500 to-emerald-600">
-                <span className="text-lg">🌱</span>
-              </div>
+              <Image
+                src="/logo.png"
+                alt="GitHub Gardener"
+                width={32}
+                height={32}
+                className="h-8 w-8 object-contain"
+              />
               <span className="text-lg font-semibold text-foreground">
                 GitHub Gardener
               </span>

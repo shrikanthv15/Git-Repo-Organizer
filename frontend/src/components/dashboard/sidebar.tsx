@@ -1,6 +1,7 @@
 "use client";
 
-import { Home, Briefcase, Settings, Leaf, LogOut } from "lucide-react";
+import Image from "next/image";
+import { Home, Briefcase, Settings, LogOut } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 
@@ -33,8 +34,8 @@ export function DashboardSidebar({ activeTab, onTabChange }: SidebarProps) {
 
     return (
         <aside className="relative z-10 flex w-16 flex-col items-center border-r border-white/10 bg-card/50 backdrop-blur-sm py-4">
-            <div className="mb-8 flex h-10 w-10 items-center justify-center rounded-lg bg-gradient-to-br from-green-500/20 to-emerald-500/20">
-                <Leaf className="h-5 w-5 text-green-400" />
+            <div className="mb-8 flex h-10 w-10 items-center justify-center rounded-lg overflow-hidden">
+                <Image src="/logo.png" alt="GitHub Gardener" width={40} height={40} className="h-10 w-10 object-contain" />
             </div>
             <nav className="flex flex-1 flex-col items-center gap-2">
                 {navItems.map((item) => (
