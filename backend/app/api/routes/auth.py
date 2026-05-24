@@ -1,4 +1,4 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from app.services import github_service
@@ -16,9 +16,7 @@ async def auth_exchange(body: AuthExchangeRequest):
     try:
         access_token = await github_service.exchange_code_for_token(body.code)
     except ValueError as exc:
-        from fastapi import HTTPException
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception:
-        from fastapi import HTTPException
         raise HTTPException(status_code=502, detail="Failed to exchange code with GitHub")
     return {"access_token": access_token}
