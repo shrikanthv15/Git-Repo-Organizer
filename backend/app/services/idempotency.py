@@ -62,12 +62,17 @@ def lookup_idempotency_key(
     )
     row = session.exec(stmt).first()
     if row:
+        # SQLite drops tzinfo on round-trip; assume UTC for naive values
+        # so the age subtraction below doesn't blow up under sqlite test DBs.
+        created_at = row.created_at
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=timezone.utc)
         logger.info(
             "idempotency_hit",
             endpoint=endpoint,
             key=key,
             workflow_id=row.workflow_id,
-            age_seconds=int((datetime.now(timezone.utc) - row.created_at).total_seconds()),
+            age_seconds=int((datetime.now(timezone.utc) - created_at).total_seconds()),
         )
         return row.workflow_id
     return None
@@ -87,7 +92,14 @@ def record_idempotency_key(
     should ``session.commit()``.
     """
     fp = fingerprint_token(token)
-    existing = session.get(IdempotencyKey, (fp, key, endpoint))
+    # Use a query rather than session.get() with a tuple PK — SQLAlchemy's
+    # composite-PK identity-key handling is awkward across versions; a
+    # plain select is portable.
+    existing = session.exec(select(IdempotencyKey).where(
+        IdempotencyKey.token_fingerprint == fp,
+        IdempotencyKey.key == key,
+        IdempotencyKey.endpoint == endpoint,
+    )).first()
     if existing is not None:
         # Race: another concurrent request already inserted. Leave existing.
         return
