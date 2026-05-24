@@ -1,10 +1,145 @@
 import json
+from typing import Any
 
+import structlog
+import tiktoken
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from litellm import acompletion
 
 from app.core.config import settings
+
+logger = structlog.get_logger(__name__)
+
+
+# E5 guardrails — LLM cost cap
+# -----------------------------------------------------------------------------
+# Per-model USD price per 1k tokens: (input_price, output_price).
+# Conservative defaults below cover the most likely models. Unknown models
+# fall back to ``DEFAULT_PRICE`` (cheaper than mistakenly approving a
+# big-model spend).
+_PRICE_TABLE: dict[str, tuple[float, float]] = {
+    "gpt-4o-mini":         (0.00015, 0.00060),
+    "gpt-4o":              (0.00250, 0.01000),
+    "gpt-4.1-mini":        (0.00040, 0.00160),
+    "gpt-3.5-turbo":       (0.00050, 0.00150),
+    "claude-haiku-4.5":    (0.00080, 0.00400),
+    "claude-sonnet-4.5":   (0.00300, 0.01500),
+    "claude-opus-4.7":     (0.01500, 0.07500),
+}
+_DEFAULT_PRICE: tuple[float, float] = (0.00500, 0.01500)
+
+
+class LLMCostExceededError(Exception):
+    """Raised pre-call when an LLM request's estimated cost exceeds the budget.
+
+    Attributes:
+        estimated_cost: float USD
+        max_cost: float USD (the configured cap)
+        prompt_tokens: int (counted via tiktoken)
+    """
+
+    def __init__(
+        self,
+        message: str,
+        estimated_cost: float,
+        max_cost: float,
+        prompt_tokens: int,
+    ) -> None:
+        super().__init__(message)
+        self.estimated_cost = estimated_cost
+        self.max_cost = max_cost
+        self.prompt_tokens = prompt_tokens
+
+
+def _count_message_tokens(messages: list[dict], model: str) -> int:
+    try:
+        encoding = tiktoken.encoding_for_model(model)
+    except KeyError:
+        encoding = tiktoken.get_encoding("cl100k_base")
+    total = 0
+    for m in messages:
+        content = m.get("content") or ""
+        if isinstance(content, list):
+            # multipart content (OpenAI vision-style): sum text segments
+            for part in content:
+                if isinstance(part, dict) and part.get("type") == "text":
+                    total += len(encoding.encode(part.get("text", "")))
+        else:
+            total += len(encoding.encode(content))
+    return total
+
+
+def _estimate_cost(prompt_tokens: int, max_output_tokens: int, model: str) -> float:
+    in_price, out_price = _PRICE_TABLE.get(model, _DEFAULT_PRICE)
+    return (prompt_tokens / 1000.0) * in_price + (max_output_tokens / 1000.0) * out_price
+
+
+def _check_llm_budget(messages: list[dict], model: str) -> int:
+    """Pre-flight: count prompt tokens, estimate cost, raise if over budget."""
+    prompt_tokens = _count_message_tokens(messages, model)
+    max_out = settings.LLM_MAX_TOKENS_PER_REQUEST
+
+    # Reject prompts that are themselves bigger than the per-request cap —
+    # they'd have no room left for output under most context windows.
+    if prompt_tokens > max_out:
+        raise LLMCostExceededError(
+            f"Prompt has {prompt_tokens} tokens which exceeds "
+            f"LLM_MAX_TOKENS_PER_REQUEST={max_out}. "
+            f"Split the prompt or raise the limit.",
+            estimated_cost=_estimate_cost(prompt_tokens, max_out, model),
+            max_cost=settings.LLM_MAX_COST_PER_REQUEST_USD,
+            prompt_tokens=prompt_tokens,
+        )
+
+    estimated_cost = _estimate_cost(prompt_tokens, max_out, model)
+    logger.info(
+        "llm_pre_call",
+        model=model,
+        prompt_tokens=prompt_tokens,
+        max_output_tokens=max_out,
+        estimated_cost_usd=round(estimated_cost, 4),
+    )
+    if estimated_cost > settings.LLM_MAX_COST_PER_REQUEST_USD:
+        raise LLMCostExceededError(
+            f"Estimated request cost ${estimated_cost:.4f} exceeds "
+            f"LLM_MAX_COST_PER_REQUEST_USD=${settings.LLM_MAX_COST_PER_REQUEST_USD:.4f} "
+            f"(model={model}, prompt_tokens={prompt_tokens})",
+            estimated_cost=estimated_cost,
+            max_cost=settings.LLM_MAX_COST_PER_REQUEST_USD,
+            prompt_tokens=prompt_tokens,
+        )
+    return prompt_tokens
+
+
+async def _safe_acompletion(**kwargs: Any) -> Any:
+    """Wrapper around litellm.acompletion enforcing the E5 budget guardrails.
+
+    - Counts prompt tokens via tiktoken; raises LLMCostExceededError if the
+      prompt or its estimated cost exceeds the configured caps.
+    - Injects ``max_tokens=LLM_MAX_TOKENS_PER_REQUEST`` if the caller didn't
+      pass it explicitly.
+    - Logs post-call usage (prompt/completion tokens + actual cost) via
+      structlog under event ``llm_post_call``.
+    """
+    messages = kwargs.get("messages") or []
+    model = kwargs.get("model") or settings.LLM_MODEL
+    _check_llm_budget(messages, model)
+    kwargs.setdefault("max_tokens", settings.LLM_MAX_TOKENS_PER_REQUEST)
+    response = await acompletion(**kwargs)
+    try:
+        usage = response.usage
+        actual_cost = _estimate_cost(usage.prompt_tokens, usage.completion_tokens, model)
+        logger.info(
+            "llm_post_call",
+            model=model,
+            prompt_tokens=usage.prompt_tokens,
+            completion_tokens=usage.completion_tokens,
+            actual_cost_usd=round(actual_cost, 6),
+        )
+    except (AttributeError, Exception) as exc:
+        logger.warning("llm_post_call_usage_unavailable", error=str(exc))
+    return response
 
 SYSTEM_PROMPT = (
     "You are a technical documentarian. "
@@ -56,7 +191,7 @@ async def generate_readme(
     if settings.LITELLM_API_BASE:
         kwargs["api_base"] = settings.LITELLM_API_BASE
 
-    response = await acompletion(**kwargs)
+    response = await _safe_acompletion(**kwargs)
     return response.choices[0].message.content
 
 
@@ -106,7 +241,7 @@ async def generate_deep_readme(
     if settings.LITELLM_API_BASE:
         kwargs["api_base"] = settings.LITELLM_API_BASE
 
-    response = await acompletion(**kwargs)
+    response = await _safe_acompletion(**kwargs)
     return response.choices[0].message.content
 
 
@@ -115,10 +250,18 @@ async def generate_deep_readme(
 # ---------------------------------------------------------------------------
 
 def _get_chat_model() -> ChatOpenAI:
-    """Factory that builds a ChatOpenAI pointing at the LiteLLM proxy."""
+    """Factory that builds a ChatOpenAI pointing at the LiteLLM proxy.
+
+    E5: pass `max_tokens=LLM_MAX_TOKENS_PER_REQUEST` so LangChain-based
+    chains share the same output cap as the direct ``acompletion`` path.
+    Cost-cap pre-flight is NOT applied here — LangChain chains construct
+    prompts dynamically via templates, so the check would need to run
+    after templating. Tracked as F-008 follow-up.
+    """
     kwargs: dict = {
         "model": settings.LLM_MODEL,
         "api_key": settings.LITELLM_API_KEY,
+        "max_tokens": settings.LLM_MAX_TOKENS_PER_REQUEST,
     }
     if settings.LITELLM_API_BASE:
         kwargs["base_url"] = settings.LITELLM_API_BASE
