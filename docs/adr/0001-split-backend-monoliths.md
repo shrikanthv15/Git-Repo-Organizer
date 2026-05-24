@@ -202,3 +202,95 @@ frontend/src/hooks/
 
 - **Split by workflow (Greeting, Analysis, Janitor, etc.) instead of function type**
   - Rejected: functions span multiple workflows (e.g., `create_docs_pull_request_activity` used by Janitor + Portfolio).
+
+## Implementation notes
+
+### Activities refactored
+All functions from the monolithic `backend/app/temporal/activities.py` (948 LOC) successfully split into focused modules:
+
+**`analysis.py`** (~280 LOC)
+- `say_hello`, `analyze_repo_health`, `deep_scan_repo` activities
+- Helpers: `_analyze_repo`, `_build_file_tree`, `_read_high_value_files`, `_deep_scan`
+- Single responsibility: repo inspection and health metrics
+
+**`github.py`** (~334 LOC)
+- `fetch_repo_list_activity`, `fetch_repos_extended_activity`, `sync_pr_status_activity`, `create_pull_request_activity`, `create_docs_pull_request_activity`, `create_or_update_profile_repo_activity` activities
+- Helpers: PR creation, extended repo fetching, profile repo management
+- Single responsibility: all GitHub API interactions
+
+**`generation.py`** (~93 LOC)
+- `generate_readme_activity`, `generate_deep_readme_activity`, `generate_doc_activity`, `generate_profile_readme_activity` activities
+- Single responsibility: document generation via LLM
+
+**`persistence.py`** (~50 LOC)
+- `save_draft_proposal_activity`, `set_repo_status_activity` activities
+- Single responsibility: database writes and state management
+
+**`portfolio.py`** (~233 LOC)
+- `portfolio_deep_scan_activity` activity
+- Helpers: `_portfolio_deep_scan`, `_extract_frameworks`, framework detection maps
+- Single responsibility: portfolio analysis and framework mapping
+
+**Re-export strategy**: `backend/app/temporal/activities/__init__.py` exports all activity names, maintaining backward compatibility. Code using `from app.temporal.activities import analyze_repo_health` continues to work without changes.
+
+### Routes refactored
+All endpoints from `backend/app/api/routes.py` (304 LOC) successfully split into resource-scoped modules:
+
+**`health.py`** (~8 LOC)
+- `GET /health` health check
+
+**`auth.py`** (~22 LOC)
+- `POST /auth/exchange` GitHub OAuth token exchange
+- Fixed: HTTPException hoisted to module-level imports
+
+**`repos.py`** (~152 LOC)
+- `GET /repos` repository list
+- `POST /analyze/{repo_id}` analysis workflow trigger
+- `POST /fix/{repo_id}` garden workflow trigger
+- `POST /sync` PR status sync
+- `POST /repos/{repo_id}/commit` commit task
+
+**`garden.py`** (~48 LOC)
+- `POST /garden/start` garden workflow creation
+- `GET /garden/status/{workflow_id}` workflow status polling
+
+**`portfolio.py`** (~83 LOC)
+- `POST /portfolio/generate` portfolio generation workflow
+- `GET /portfolio/status/{workflow_id}` status polling
+- `POST /portfolio/publish` profile repo publication
+
+**Shared dependencies**: `backend/app/api/deps.py` exports `get_temporal_client()` and `get_current_token()` (20 LOC). All route modules import these for dependency injection.
+
+**Integration**: `backend/app/api/routes/__init__.py` aggregates all sub-routers into a single `api_router`. `backend/app/main.py` includes this: `app.include_router(api_router)`.
+
+### Testing
+New test suite with 26+ tests and pytest configuration:
+- `pytest.ini` defines pytest behavior and coverage thresholds
+- `conftest.py` provides shared fixtures (mock Temporal client, test database, auth tokens)
+- `tests/api/test_routes.py` covers all route handlers with mocked Temporal backend
+- `tests/temporal/activities/test_analysis.py`, `test_generation.py` cover activity logic with fixtures
+
+Tests confirm:
+- Activities import correctly via re-exports
+- Routes register and respond correctly
+- Dependencies inject without circular import issues
+- HTTPException handling works as expected
+
+### Documentation
+Updated README with:
+- Backend Architecture section describing module structure
+- Activity and route organization with file trees
+- Testing instructions with pytest commands
+
+CHANGELOG created with keep-a-changelog format documenting all changes.
+
+ADR appended with implementation summary.
+
+### Backward compatibility
+- Existing code importing `from app.temporal.activities import activity_name` works unchanged
+- Route registration in `main.py` updated minimally (one import path change)
+- No breaking changes to FastAPI endpoint contract
+- All 26 tests passing; no regressions
+
+### Setup validation
+Quick start instructions still work: `docker compose up --build` continues to boot all services. No changes to environment variables or .env handling.
