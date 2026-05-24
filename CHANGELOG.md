@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 ## [Unreleased]
 
 ### Added
+- **Test coverage to 61%** (E2): backend pytest suite expanded from 65 → 104 tests; new files `tests/test_crud.py` (26 tests for all 11 CRUD functions × happy + miss paths), `tests/api/test_routes_repos.py` (16 integration tests for /repos, /analyze, /fix, /sync, /commit + idempotency-hit paths), `tests/api/test_routes_portfolio.py` (7 integration tests for /portfolio/generate, /status, /publish). Frontend Vitest + React Testing Library scaffold (`vitest.config.ts`, `tests/setup.ts`) + 13 tests covering `RepoCard` rendering and the `useDraftProposal` editor-state hook. CI workflow `.github/workflows/test.yml` runs backend (uv + pytest with `--cov-fail-under=60`) + frontend (pnpm typecheck + vitest + build) on every PR + push to main. `Makefile` exposes `make test` / `make test-backend` / `make test-frontend` / `make test-cov` / `make build` / `make typecheck` for the same flow locally.
 - **Production guardrails** (E5): three independent guardrails on the
   backend, each with its own typed exception + structlog event stream:
   - **GitHub rate-limit-aware client** (`app/services/github_client.py`):
