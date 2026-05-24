@@ -7,6 +7,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 ## [Unreleased]
 
 ### Added
+- **Production guardrails** (E5): three independent guardrails on the
+  backend, each with its own typed exception + structlog event stream:
+  - **GitHub rate-limit-aware client** (`app/services/github_client.py`):
+    wraps PyGithub with pre-flight `rate_limit.core` checks; backs off
+    with jitter when `remaining < 100`; raises `GithubRateLimitError`
+    (carrying `reset_at`) when exhausted so Temporal activities can
+    sleep + retry. All `github_service.py` calls now go through it.
+  - **LLM cost cap** (`app/services/llm_service.py`): pre-flight token
+    count (via `tiktoken`) + cost estimate (`_PRICE_TABLE` for 7 known
+    models + conservative default for unknown); rejects when prompt
+    tokens > `LLM_MAX_TOKENS_PER_REQUEST` (default 4000) or estimated
+    cost > `LLM_MAX_COST_PER_REQUEST_USD` (default 0.50). FastAPI
+    exception handler converts the resulting `LLMCostExceededError` to
+    HTTP 400 with `{error, detail, estimated_cost_usd, max_cost_usd,
+    prompt_tokens}`. Post-call usage logged via `llm_post_call` event.
+  - **Idempotency keys** (`app/services/idempotency.py` + Alembic
+    migration 004): mutating endpoints `/garden`, `/fix/{repo_id}`,
+    `/portfolio/generate`, `/repos/{repo_id}/commit` accept an
+    `Idempotency-Key` header. Same key + same Bearer token within 24h
+    returns the previously-issued `workflow_id` (or `pr_url` for
+    `/commit`) instead of starting new work. Raw tokens are never
+    persisted — only a sha256-truncated fingerprint.
 - **Structured logging** (E4, PR #10): backend uses `structlog` with JSON output in prod (toggle via `LOG_FORMAT` env, default `json` in prod / `human` in dev) and `LOG_LEVEL` env. `LoggingMiddleware` binds `request_id` + `user_id` per HTTP request; `temporal_activity_context()` binds `workflow_id`/`activity_name`/`repo_id`/`user_id` per Temporal activity. Frontend gains `app/error.tsx` + `app/global-error.tsx` page-level boundaries and a `lib/logger.ts` wrapper that ships errors to `/api/log`.
 - **Frontend split** (E1b, PR #11): `repo-detail-sheet.tsx` (439 LOC) refactored into `repo-detail-sheet.tsx` (241 — orchestration), `components/dashboard/draft-proposal-editor.tsx` (196 — extracted editor), and `hooks/use-draft-proposal.ts` (75 — editor state). External `RepoDetailSheet` props unchanged.
 - **Backend activity modules** (E1, PR #9): Split monolithic `backend/app/temporal/activities.py` (948 LOC) into focused concern-based modules:
