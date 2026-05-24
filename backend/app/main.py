@@ -17,7 +17,10 @@ log_level = os.getenv("LOG_LEVEL", "INFO").upper()
 if log_format == "json":
     structlog.configure(
         processors=[
-            structlog.processors.JSONRenderer()
+            structlog.contextvars.merge_contextvars,
+            structlog.processors.add_log_level,
+            structlog.processors.TimeStamper(fmt="iso"),
+            structlog.processors.JSONRenderer(),
         ],
         context_class=dict,
         logger_factory=structlog.PrintLoggerFactory(),
@@ -26,7 +29,10 @@ if log_format == "json":
 else:
     structlog.configure(
         processors=[
-            structlog.dev.ConsoleRenderer()
+            structlog.contextvars.merge_contextvars,
+            structlog.processors.add_log_level,
+            structlog.processors.TimeStamper(fmt="iso"),
+            structlog.dev.ConsoleRenderer(),
         ],
         context_class=dict,
         logger_factory=structlog.PrintLoggerFactory(),

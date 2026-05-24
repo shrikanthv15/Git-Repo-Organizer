@@ -11,7 +11,10 @@ def test_workflow_logs_structured():
     
     # Temporarily configure structlog to write to our StringIO
     structlog.configure(
-        processors=[structlog.processors.JSONRenderer()],
+        processors=[
+            structlog.contextvars.merge_contextvars,
+            structlog.processors.JSONRenderer(),
+        ],
         context_class=dict,
         logger_factory=lambda: structlog.PrintLogger(file=output),
         cache_logger_on_first_use=False,
@@ -38,7 +41,10 @@ def test_temporal_context_clears():
     """Ensure context is properly cleared after the context manager exits."""
     output = StringIO()
     structlog.configure(
-        processors=[structlog.processors.JSONRenderer()],
+        processors=[
+            structlog.contextvars.merge_contextvars,
+            structlog.processors.JSONRenderer(),
+        ],
         context_class=dict,
         logger_factory=lambda: structlog.PrintLogger(file=output),
         cache_logger_on_first_use=False,
