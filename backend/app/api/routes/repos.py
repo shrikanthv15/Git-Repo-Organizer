@@ -25,8 +25,16 @@ from app.temporal.workflows import (
     JanitorWorkflow,
 )
 from app.api.deps import get_current_token, get_temporal_client
+from app.services.idempotency import (
+    get_idempotency_key,
+    lookup_idempotency_key,
+    record_idempotency_key,
+)
 
 router = APIRouter()
+
+_FIX_ENDPOINT = "/fix"
+_COMMIT_ENDPOINT = "/commit"
 
 
 @router.post("/test-workflow")
@@ -96,7 +104,25 @@ async def analyze_repo(repo_id: int, token: str = Depends(get_current_token)):
 
 
 @router.post("/fix/{repo_id}")
-async def fix_repo(repo_id: int, token: str = Depends(get_current_token)):
+async def fix_repo(
+    repo_id: int,
+    token: str = Depends(get_current_token),
+    idem_key: str | None = Depends(get_idempotency_key),
+):
+    """Trigger Janitor agent to create README PR for a repo.
+
+    E5: pass an ``Idempotency-Key`` header to dedup within 24h —
+    repeated calls with the same key + token return the previously-issued
+    workflow_id instead of starting a new Janitor run.
+    """
+    if idem_key:
+        with get_session() as session:
+            cached = lookup_idempotency_key(
+                session, key=idem_key, token=token, endpoint=_FIX_ENDPOINT,
+            )
+            if cached:
+                return {"workflow_id": cached, "idempotent": True}
+
     try:
         details = await github_service.get_repo_details(token, repo_id)
     except Exception:
@@ -115,6 +141,15 @@ async def fix_repo(repo_id: int, token: str = Depends(get_current_token)):
         id=workflow_id,
         task_queue="gardener-queue",
     )
+
+    if idem_key:
+        with get_session() as session:
+            record_idempotency_key(
+                session, key=idem_key, token=token,
+                endpoint=_FIX_ENDPOINT, workflow_id=workflow_id,
+            )
+            session.commit()
+
     return {"workflow_id": workflow_id}
 
 
@@ -136,8 +171,22 @@ async def commit_docs(
     repo_id: int,
     body: CommitRequest,
     token: str = Depends(get_current_token),
+    idem_key: str | None = Depends(get_idempotency_key),
 ):
-    """Approve selected draft files and push them to GitHub as a PR."""
+    """Approve selected draft files and push them to GitHub as a PR.
+
+    E5: pass an ``Idempotency-Key`` header to dedup within 24h. The cached
+    value is the previously-returned ``pr_url`` (which serves the same
+    side-effect-identifier role as ``workflow_id`` does on other endpoints).
+    """
+    if idem_key:
+        with get_session() as session:
+            cached_pr = lookup_idempotency_key(
+                session, key=idem_key, token=token, endpoint=_COMMIT_ENDPOINT,
+            )
+            if cached_pr:
+                return {"status": "committed", "pr_url": cached_pr, "idempotent": True}
+
     # 1. Fetch draft proposal from DB
     with get_session() as session:
         draft = get_draft_proposal(session, github_repo_id=repo_id)
@@ -170,5 +219,14 @@ async def commit_docs(
         save_draft_proposal(session, github_repo_id=repo_id, draft_proposal=None)
         set_repo_status(session, github_repo_id=repo_id, status="idle")
         session.commit()
+
+    # 6. Record idempotency key → pr_url so repeat calls return the same PR
+    if idem_key:
+        with get_session() as session:
+            record_idempotency_key(
+                session, key=idem_key, token=token,
+                endpoint=_COMMIT_ENDPOINT, workflow_id=pr_url,
+            )
+            session.commit()
 
     return {"status": "committed", "pr_url": pr_url}

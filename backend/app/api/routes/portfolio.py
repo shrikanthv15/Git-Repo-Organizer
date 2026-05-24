@@ -5,11 +5,19 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.services import github_service
+from app.services.idempotency import (
+    get_idempotency_key,
+    lookup_idempotency_key,
+    record_idempotency_key,
+)
+from app.db.session import get_session
 from app.temporal.workflows import PortfolioInput, PortfolioWorkflow
 from app.temporal.activities import create_or_update_profile_repo_activity
 from app.api.deps import get_current_token, get_temporal_client
 
 router = APIRouter()
+
+_ENDPOINT = "/portfolio/generate"
 
 
 class PortfolioGenerateRequest(BaseModel):
@@ -26,10 +34,22 @@ class PortfolioPublishRequest(BaseModel):
 async def generate_portfolio(
     body: PortfolioGenerateRequest,
     token: str = Depends(get_current_token),
+    idem_key: str | None = Depends(get_idempotency_key),
 ):
-    """Trigger the Portfolio Studio workflow with user-selected repos."""
+    """Trigger the Portfolio Studio workflow with user-selected repos.
+
+    E5: pass an ``Idempotency-Key`` header to dedup within 24h.
+    """
     if not body.repo_ids or len(body.repo_ids) > 6:
         raise HTTPException(status_code=400, detail="Select between 1 and 6 repositories")
+
+    if idem_key:
+        with get_session() as session:
+            cached = lookup_idempotency_key(
+                session, key=idem_key, token=token, endpoint=_ENDPOINT,
+            )
+            if cached:
+                return {"workflow_id": cached, "idempotent": True}
 
     username = await github_service.get_username(token)
     links_json = json.dumps(body.links) if body.links else "{}"
@@ -48,6 +68,15 @@ async def generate_portfolio(
         id=workflow_id,
         task_queue="gardener-queue",
     )
+
+    if idem_key:
+        with get_session() as session:
+            record_idempotency_key(
+                session, key=idem_key, token=token,
+                endpoint=_ENDPOINT, workflow_id=workflow_id,
+            )
+            session.commit()
+
     return {"workflow_id": workflow_id}
 
 
