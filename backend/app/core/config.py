@@ -18,5 +18,16 @@ class Settings(BaseSettings):
     TEMPORAL_ADDRESS: str = "localhost:7233"
     FRONTEND_URL: str = ""
 
+    # E5 guardrails — LLM cost cap
+    # Reject a request when (prompt_tokens * input_price + max_output_tokens *
+    # output_price) > this. Default $0.50 is comfortable headroom for normal
+    # gpt-4o-mini calls (~$0.001-0.01 typical) and trips when something
+    # accidentally feeds the LLM a massive prompt.
+    LLM_MAX_COST_PER_REQUEST_USD: float = 0.50
+    # Passed to LiteLLM as max_tokens (caps OUTPUT) AND used as the
+    # pre-flight INPUT-prompt size check: a prompt larger than this would
+    # leave no room for output under most context windows.
+    LLM_MAX_TOKENS_PER_REQUEST: int = 4000
+
 
 settings = Settings()

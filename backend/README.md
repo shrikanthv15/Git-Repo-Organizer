@@ -124,5 +124,34 @@ Copy `.env.example` to `.env`. Key vars:
 - `TEMPORAL_ADDRESS` — Temporal server (auto-set in docker compose)
 - `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` — GitHub OAuth app creds
 - `LITELLM_API_KEY` / `LITELLM_API_BASE` / `LLM_MODEL` — LLM provider
+- `LLM_MAX_COST_PER_REQUEST_USD` (default `0.50`) — E5 cost cap; estimated
+  per-request cost above this raises `LLMCostExceededError` → HTTP 400
+- `LLM_MAX_TOKENS_PER_REQUEST` (default `4000`) — E5 output cap; also the
+  rejection threshold for oversized prompts
 - `FRONTEND_URL` — CORS allow-list (comma-separated)
 - `LOG_FORMAT` / `LOG_LEVEL` — see "Logging" above
+
+## Production guardrails (E5)
+
+Three independent failure-isolated guardrails:
+
+1. **GitHub rate-limit-aware client** — `app/services/github_client.py`
+   wraps PyGithub; backs off when `rate_limit.core.remaining < 100`;
+   raises `GithubRateLimitError(reset_at)` when exhausted. Temporal
+   activities can catch it + sleep until `reset_at` + retry.
+
+2. **LLM cost cap** — `app/services/llm_service._safe_acompletion`
+   counts prompt tokens via `tiktoken`, computes estimated USD cost from
+   `_PRICE_TABLE`, rejects when over budget. `LangChain ChatOpenAI` is
+   capped via `max_tokens` but uses a separate cost-check path —
+   tracked as F-008.
+
+3. **Idempotency keys** — `Idempotency-Key` header on `/garden`,
+   `/fix/{repo_id}`, `/portfolio/generate`, `/repos/{repo_id}/commit`.
+   24h dedup window per (key, token, endpoint). Storage: composite-PK
+   `idempotency_keys` table (Alembic 004). Raw tokens never persisted
+   (sha256-truncated fingerprint only).
+
+Filter logs by event name to monitor each guardrail:
+`github_rate_limit_low|exhausted`, `llm_pre_call|post_call`,
+`llm_cost_exceeded`, `idempotency_hit|recorded`.

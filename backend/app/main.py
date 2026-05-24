@@ -3,12 +3,14 @@ import os
 import structlog
 
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.api.routes import api_router
 from app.core.config import settings
 from app.middleware.logging import LoggingMiddleware
+from app.services.llm_service import LLMCostExceededError
 
 # Configure structlog
 log_format = os.getenv("LOG_FORMAT", "human" if os.getenv("ENV") == "dev" else "json")
@@ -63,6 +65,23 @@ app.add_middleware(
 )
 
 app.include_router(api_router, prefix="/api")
+
+
+# E5 — surface LLM cost-cap violations as 400 (not 500) so callers
+# get a clear "you exceeded the budget" message rather than a generic
+# server error.
+@app.exception_handler(LLMCostExceededError)
+async def llm_cost_exceeded_handler(request: Request, exc: LLMCostExceededError) -> JSONResponse:
+    return JSONResponse(
+        status_code=400,
+        content={
+            "detail": str(exc),
+            "error": "llm_cost_exceeded",
+            "estimated_cost_usd": exc.estimated_cost,
+            "max_cost_usd": exc.max_cost,
+            "prompt_tokens": exc.prompt_tokens,
+        },
+    )
 
 if __name__ == "__main__":
     uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True)

@@ -1,10 +1,20 @@
+"""High-level async GitHub helpers.
+
+Wraps :class:`app.services.github_client.GithubClient` (which adds
+rate-limit-aware retries) in ``asyncio.to_thread()`` so they're safe to
+call from FastAPI / Temporal activity event loops.
+
+The non-rate-limited bit — :func:`exchange_code_for_token` — uses ``httpx``
+directly since OAuth code exchange isn't governed by the same per-token
+rate limits.
+"""
 import asyncio
 
 import httpx
-from github import Auth, Github
 
 from app.core.config import settings
 from app.schemas.github import Repo
+from app.services.github_client import GithubClient
 
 GITHUB_TOKEN_URL = "https://github.com/login/oauth/access_token"
 
@@ -31,22 +41,9 @@ async def exchange_code_for_token(code: str) -> str:
 
 
 def _fetch_repos(access_token: str) -> list[Repo]:
-    """Synchronous PyGithub call — run via asyncio.to_thread."""
-    g = Github(auth=Auth.Token(access_token))
-    repos = []
-    for r in g.get_user().get_repos(affiliation="owner"):
-        repos.append(
-            Repo(
-                id=r.id,
-                name=r.name,
-                full_name=r.full_name,
-                private=r.private,
-                html_url=r.html_url,
-                description=r.description,
-            )
-        )
-    g.close()
-    return repos
+    """Sync helper — run via asyncio.to_thread."""
+    with GithubClient(access_token) as client:
+        return [Repo(**row) for row in client.list_user_repos_as_dicts()]
 
 
 async def list_user_repos(access_token: str) -> list[Repo]:
@@ -55,12 +52,8 @@ async def list_user_repos(access_token: str) -> list[Repo]:
 
 
 def _get_repo_full_name(access_token: str, repo_id: int) -> str:
-    """Synchronous PyGithub call — run via asyncio.to_thread."""
-    g = Github(auth=Auth.Token(access_token))
-    repo = g.get_repo(repo_id)
-    full_name = repo.full_name
-    g.close()
-    return full_name
+    with GithubClient(access_token) as client:
+        return client.get_repo_full_name(repo_id)
 
 
 async def get_repo_full_name(access_token: str, repo_id: int) -> str:
@@ -69,16 +62,8 @@ async def get_repo_full_name(access_token: str, repo_id: int) -> str:
 
 
 def _get_repo_details(access_token: str, repo_id: int) -> dict:
-    """Synchronous PyGithub call — run via asyncio.to_thread."""
-    g = Github(auth=Auth.Token(access_token))
-    repo = g.get_repo(repo_id)
-    details = {
-        "name": repo.name,
-        "full_name": repo.full_name,
-        "description": repo.description or "",
-    }
-    g.close()
-    return details
+    with GithubClient(access_token) as client:
+        return client.get_repo_details(repo_id)
 
 
 async def get_repo_details(access_token: str, repo_id: int) -> dict:
@@ -87,11 +72,8 @@ async def get_repo_details(access_token: str, repo_id: int) -> dict:
 
 
 def _get_username(access_token: str) -> str:
-    """Synchronous PyGithub call — run via asyncio.to_thread."""
-    g = Github(auth=Auth.Token(access_token))
-    username = g.get_user().login
-    g.close()
-    return username
+    with GithubClient(access_token) as client:
+        return client.get_user_login()
 
 
 async def get_username(access_token: str) -> str:

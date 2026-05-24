@@ -43,3 +43,24 @@ class AnalysisResult(SQLModel, table=True):
     last_gardener_run_at: datetime | None = Field(default=None)
 
     repository: Repository = Relationship(back_populates="analysis_results")
+
+
+class IdempotencyKey(SQLModel, table=True):
+    """E5 — dedup window for mutating endpoints.
+
+    Composite PK on (token_fingerprint, key, endpoint) so two users sharing
+    the same key value, OR one user using the same key across endpoints, all
+    get distinct rows. The 24h dedup window is enforced at query time via
+    ``created_at`` (see ``app/services/idempotency.py``).
+    """
+
+    __tablename__ = "idempotency_keys"
+
+    token_fingerprint: str = Field(primary_key=True, max_length=64)
+    key: str = Field(primary_key=True, max_length=128)
+    endpoint: str = Field(primary_key=True, max_length=128)
+    workflow_id: str = Field(max_length=256)
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        index=True,
+    )
