@@ -1,4 +1,6 @@
 import logging
+import os
+import structlog
 
 import uvicorn
 from fastapi import FastAPI
@@ -6,11 +8,41 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import api_router
 from app.core.config import settings
+from app.middleware.logging import LoggingMiddleware
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
-)
+# Configure structlog
+log_format = os.getenv("LOG_FORMAT", "human" if os.getenv("ENV") == "dev" else "json")
+log_level = os.getenv("LOG_LEVEL", "INFO").upper()
+
+if log_format == "json":
+    structlog.configure(
+        processors=[
+            structlog.contextvars.merge_contextvars,
+            structlog.processors.add_log_level,
+            structlog.processors.TimeStamper(fmt="iso"),
+            structlog.processors.JSONRenderer(),
+        ],
+        context_class=dict,
+        logger_factory=structlog.PrintLoggerFactory(),
+        cache_logger_on_first_use=False,
+    )
+else:
+    structlog.configure(
+        processors=[
+            structlog.contextvars.merge_contextvars,
+            structlog.processors.add_log_level,
+            structlog.processors.TimeStamper(fmt="iso"),
+            structlog.dev.ConsoleRenderer(),
+        ],
+        context_class=dict,
+        logger_factory=structlog.PrintLoggerFactory(),
+        cache_logger_on_first_use=False,
+    )
+
+# Root logger
+logging.basicConfig(level=getattr(logging, log_level))
+logger = structlog.get_logger()
+logger.info("app_startup", format=log_format, level=log_level)
 
 app = FastAPI(title=settings.PROJECT_NAME)
 
@@ -21,6 +53,7 @@ if settings.FRONTEND_URL:
 else:
     _allowed_origins = ["*"]
 
+app.add_middleware(LoggingMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_allowed_origins,

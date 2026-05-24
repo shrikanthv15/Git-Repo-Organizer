@@ -18,6 +18,7 @@ dependencies = [
     "pygithub>=2.8.1",
     "python-dotenv>=1.2.1",
     "sqlmodel>=0.0.22",
+    "structlog>=24.2.0",
     "temporalio>=1.21.1",
     "tiktoken>=0.7.0",
     "uvicorn>=0.40.0",
