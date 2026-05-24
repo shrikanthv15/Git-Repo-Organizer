@@ -78,7 +78,9 @@ describe("useDraftProposal", () => {
         act(() => result.current.toggleFile("b.md")); // deselect b.md
         act(() => result.current.handleCommit());
         expect(mutate).toHaveBeenCalledTimes(1);
-        const [args] = mutate.mock.calls[0];
+        const firstCall = mutate.mock.calls[0];
+        if (!firstCall) throw new Error("mutate not called");
+        const [args] = firstCall;
         expect(args.repoId).toBe(42);
         expect(args.selectedFiles).toEqual(["a.md"]);
         expect(args.editedContents).toEqual({ "a.md": "a", "b.md": "b" });
