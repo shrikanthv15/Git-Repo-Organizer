@@ -14,3 +14,7 @@ sqlmodel>=0.0.22
 temporalio>=1.21.1
 tiktoken>=0.7.0
 uvicorn>=0.40.0
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+pytest-cov>=4.1.0
+httpx>=0.28.1
