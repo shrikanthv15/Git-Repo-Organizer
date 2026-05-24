@@ -1,17 +1,20 @@
 import json
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from temporalio.client import Client
 
-from app.core.config import settings
-from app.db.crud import get_draft_proposal, get_latest_analysis_for_repos, save_draft_proposal, set_repo_status
+from app.db.crud import (
+    get_draft_proposal,
+    get_latest_analysis_for_repos,
+    save_draft_proposal,
+    set_repo_status,
+)
 from app.db.session import get_session
 from app.schemas.analysis import RepoHealth
-from app.schemas.github import AuthExchangeRequest, Repo
+from app.schemas.github import Repo
 from app.services import github_service
-from app.temporal.activities import create_docs_pull_request_activity, create_or_update_profile_repo_activity, sync_pr_status_activity
+from app.temporal.activities import create_docs_pull_request_activity
 from app.temporal.workflows import (
     AnalysisInput,
     AnalysisWorkflow,
@@ -20,42 +23,10 @@ from app.temporal.workflows import (
     GreetingWorkflow,
     JanitorInput,
     JanitorWorkflow,
-    PortfolioInput,
-    PortfolioWorkflow,
 )
+from app.api.deps import get_current_token, get_temporal_client
 
 router = APIRouter()
-
-
-async def get_temporal_client() -> Client:
-    return await Client.connect(settings.TEMPORAL_ADDRESS)
-
-
-def get_current_token(request: Request) -> str:
-    """Extract and validate the Bearer token from the Authorization header."""
-    auth = request.headers.get("Authorization")
-    if not auth or not auth.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
-    token = auth.removeprefix("Bearer ").strip()
-    if not token:
-        raise HTTPException(status_code=401, detail="Empty bearer token")
-    return token
-
-
-@router.get("/health")
-async def health_check():
-    return {"status": "healthy", "service": "GitHub Gardener"}
-
-
-@router.post("/auth/exchange")
-async def auth_exchange(body: AuthExchangeRequest):
-    try:
-        access_token = await github_service.exchange_code_for_token(body.code)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    except Exception:
-        raise HTTPException(status_code=502, detail="Failed to exchange code with GitHub")
-    return {"access_token": access_token}
 
 
 @router.post("/test-workflow")
@@ -124,33 +95,6 @@ async def analyze_repo(repo_id: int, token: str = Depends(get_current_token)):
     return {"workflow_id": workflow_id}
 
 
-@router.post("/garden/start")
-async def start_garden(
-    token: str = Depends(get_current_token),
-    limit: int = 0,
-):
-    client = await get_temporal_client()
-    workflow_id = f"garden-{uuid.uuid4()}"
-    await client.start_workflow(
-        BatchGardeningWorkflow.run,
-        BatchGardeningInput(access_token=token, limit=limit),
-        id=workflow_id,
-        task_queue="gardener-queue",
-    )
-    return {"workflow_id": workflow_id}
-
-
-@router.get("/garden/status/{workflow_id}")
-async def garden_status(workflow_id: str, token: str = Depends(get_current_token)):
-    client = await get_temporal_client()
-    handle = client.get_workflow_handle(workflow_id)
-    try:
-        status = await handle.query(BatchGardeningWorkflow.get_status)
-    except Exception:
-        raise HTTPException(status_code=404, detail=f"Workflow '{workflow_id}' not found or not queryable")
-    return status
-
-
 @router.post("/fix/{repo_id}")
 async def fix_repo(repo_id: int, token: str = Depends(get_current_token)):
     try:
@@ -177,6 +121,7 @@ async def fix_repo(repo_id: int, token: str = Depends(get_current_token)):
 @router.post("/sync")
 async def sync_pr_status(token: str = Depends(get_current_token)):
     """Check GitHub for merged/closed PRs and update local DB state."""
+    from app.temporal.activities import sync_pr_status_activity
     updated_count = await sync_pr_status_activity(token)
     return {"status": "synced", "updated_count": updated_count}
 
@@ -227,78 +172,3 @@ async def commit_docs(
         session.commit()
 
     return {"status": "committed", "pr_url": pr_url}
-
-
-# ---------------------------------------------------------------------------
-# Phase 14 / 19: Portfolio Studio
-# ---------------------------------------------------------------------------
-
-class PortfolioGenerateRequest(BaseModel):
-    repo_ids: list[int]
-    bio: str = ""
-    links: dict[str, str] | None = None
-
-
-class PortfolioPublishRequest(BaseModel):
-    readme_content: str
-
-
-@router.post("/portfolio/generate")
-async def generate_portfolio(
-    body: PortfolioGenerateRequest,
-    token: str = Depends(get_current_token),
-):
-    """Trigger the Portfolio Studio workflow with user-selected repos."""
-    if not body.repo_ids or len(body.repo_ids) > 6:
-        raise HTTPException(status_code=400, detail="Select between 1 and 6 repositories")
-
-    username = await github_service.get_username(token)
-    links_json = json.dumps(body.links) if body.links else "{}"
-
-    client = await get_temporal_client()
-    workflow_id = f"portfolio-{username}-{uuid.uuid4()}"
-    await client.start_workflow(
-        PortfolioWorkflow.run,
-        PortfolioInput(
-            access_token=token,
-            username=username,
-            repo_ids=body.repo_ids,
-            bio=body.bio,
-            links_json=links_json,
-        ),
-        id=workflow_id,
-        task_queue="gardener-queue",
-    )
-    return {"workflow_id": workflow_id}
-
-
-@router.get("/portfolio/status/{workflow_id}")
-async def portfolio_status(workflow_id: str, token: str = Depends(get_current_token)):
-    """Poll the Portfolio workflow status — now returns draft_readme."""
-    client = await get_temporal_client()
-    handle = client.get_workflow_handle(workflow_id)
-    try:
-        status = await handle.query(PortfolioWorkflow.get_status)
-    except Exception:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Workflow '{workflow_id}' not found or not queryable",
-        )
-    return status
-
-
-@router.post("/portfolio/publish")
-async def publish_portfolio(
-    body: PortfolioPublishRequest,
-    token: str = Depends(get_current_token),
-):
-    """Publish the edited portfolio README to GitHub profile repo."""
-    username = await github_service.get_username(token)
-    result = await create_or_update_profile_repo_activity(
-        username, body.readme_content, token
-    )
-    return {
-        "status": "published",
-        "profile_url": result["profile_url"],
-        "pr_url": result.get("pr_url"),
-    }
