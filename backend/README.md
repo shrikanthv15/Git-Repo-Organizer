@@ -1,291 +1,128 @@
-# GitHub Gardener - AI-Powered Repo Manager
+# backend/
 
-**Backend Architecture & API Contract**
+FastAPI service + Temporal worker for Git-Repo-Organizer. Python 3.12,
+managed via `uv`.
 
-GitHub Gardener is an intelligent repository management system that uses AI agents to analyze, monitor, and automatically improve your GitHub repositories. Built with FastAPI and Temporal workflows, it provides automated health checks and remediation through pull requests.
+## Run backend alone (no Docker)
 
----
-
-## Architecture Stack
-
-- **Python**: 3.12
-- **Web Framework**: FastAPI
-- **Workflow Engine**: Temporal
-- **AI/LLM**: LiteLLM (supports multiple providers)
-- **GitHub Integration**: PyGithub
-- **Package Manager**: uv
-
----
-
-## API Contract
-
-All authenticated endpoints require a `Bearer` token in the `Authorization` header:
-```
-Authorization: Bearer <github_access_token>
-```
-
-### Endpoints
-
-| Method | Endpoint | Auth Required | Payload | Response | Description |
-|--------|----------|---------------|---------|----------|-------------|
-| `GET` | `/api/health` | ❌ | None | `{"status": "healthy", "service": "Gardener Backend"}` | Health check endpoint |
-| `POST` | `/api/auth/exchange` | ❌ | `{"code": "string"}` | `{"access_token": "string"}` | Exchange GitHub OAuth code for access token |
-| `POST` | `/api/test-workflow` | ❌ | None | `{"result": "string"}` | Test Temporal workflow connectivity |
-| `GET` | `/api/repos` | ✅ | None | `Repo[]` | List all user-owned repositories |
-| `POST` | `/api/analyze/{repo_id}` | ✅ | None | `{"workflow_id": "string"}` | Trigger single repo health analysis |
-| `POST` | `/api/garden/start?limit=N` | ✅ | Query: `limit` (default: 3) | `{"workflow_id": "string"}` | Start batch analysis of N repos |
-| `GET` | `/api/garden/status/{workflow_id}` | ❌ | None | `BatchStatus` | Poll batch analysis progress |
-| `POST` | `/api/fix/{repo_id}` | ✅ | None | `{"workflow_id": "string"}` | Trigger Janitor agent to create README PR |
-
----
-
-## The Agents
-
-### 🌿 Gardener (Batch Analysis)
-
-**Workflow**: `BatchGardeningWorkflow`  
-**Pattern**: Parent-Child Workflow
-
-The Gardener agent performs parallel health checks across multiple repositories.
-
-**How it works:**
-1. **Parent Workflow** fetches the user's repo list (limited by `?limit=N`)
-2. Spawns **Child Workflows** (one per repo) to analyze in parallel
-3. Each child runs `AnalysisWorkflow` which checks:
-   - ✅ README presence
-   - ✅ Staleness (last push > 6 months)
-   - ✅ Description presence
-4. Aggregates results and exposes real-time status via **Queries**
-
-**Health Score Calculation:**
-- Start: 100 points
-- No README: -20
-- Stale (>6 months): -30
-- No description: -10
-
-**Use Case**: "Scan my top 10 repos and show me which ones need attention"
-
----
-
-### 🧹 Janitor (Remediation)
-
-**Workflow**: `JanitorWorkflow`  
-**Pattern**: Read → Think → Act
-
-The Janitor agent automatically fixes issues by generating documentation and creating pull requests.
-
-**How it works:**
-1. **Read**: Fetches the repository file tree (depth: 2 levels)
-2. **Think**: Sends file structure to LiteLLM to generate a professional README.md
-3. **Act**: Creates/updates branch `gardener/readme-fix`, commits README, opens PR
-
-**Idempotent Design:**
-- Reuses the same branch (`gardener/readme-fix`) across runs
-- Updates existing PR instead of creating duplicates
-- Safe to run multiple times on the same repo
-
-**Use Case**: "My repo has no README. Generate one and create a PR for me."
-
----
-
-## Data Models
-
-### `Repo`
-```json
-{
-  "id": 12345,
-  "name": "my-project",
-  "full_name": "username/my-project",
-  "private": false,
-  "html_url": "https://github.com/username/my-project",
-  "description": "A cool project"
-}
-```
-
-### `RepoHealth`
-```json
-{
-  "repo_name": "username/my-project",
-  "health_score": 70,
-  "issues": ["No README", "Stale — last push 8 months ago"],
-  "last_commit_date": "2025-05-15T10:30:00Z"
-}
-```
-
-### `BatchStatus`
-```json
-{
-  "total": 5,
-  "completed": 3,
-  "results": [
-    {
-      "repo_name": "username/repo1",
-      "health_score": 100,
-      "issues": [],
-      "last_commit_date": "2026-01-20T14:22:00Z"
-    }
-  ]
-}
-```
-
----
-
-## Developer Guide
-
-### Prerequisites
-- Python 3.12
-- `uv` package manager ([install](https://docs.astral.sh/uv/))
-- Temporal CLI ([install](https://docs.temporal.io/cli))
-
-### Environment Setup
-
-1. **Clone and navigate:**
-   ```bash
-   cd backend
-   ```
-
-2. **Install dependencies:**
-   ```bash
-   uv sync
-   ```
-
-3. **Configure environment variables:**
-   ```bash
-   cp .env.example .env
-   ```
-   
-   Edit `.env` and set:
-   - `GITHUB_CLIENT_ID` - Your GitHub OAuth App Client ID
-   - `GITHUB_CLIENT_SECRET` - Your GitHub OAuth App Secret
-   - `LITELLM_API_KEY` - Your LiteLLM API key
-   - `LITELLM_API_BASE` - LiteLLM endpoint (optional)
-   - `LLM_MODEL` - Model name (e.g., `gpt-4o-mini`)
-
-### Running the Stack
-
-**Terminal 1: Temporal Dev Server**
-```bash
-temporal server start-dev
-```
-- UI: http://localhost:8233
-
-**Terminal 2: Temporal Worker**
 ```bash
 cd backend
-uv run python -m app.temporal.worker
+uv sync                            # install deps + create .venv
+uv run python -m app.main          # API on :8000
+uv run python -m app.temporal.worker   # in another terminal: worker on gardener-queue
 ```
-- Listens on queue: `gardener-queue`
 
-**Terminal 3: FastAPI Server**
+Needs Postgres + Temporal Server running externally. Easiest path is
+`docker compose up postgres temporal` from the repo root for just those
+services, then run the API + worker locally with auto-reload.
+
+## Tests
+
+Run from the **repo root** (pytest.ini lives there):
+
 ```bash
-cd backend
-uv run python -m app.main
-```
-- API: http://localhost:8000
-- Docs: http://localhost:8000/docs
-
-### Testing the API
-
-**Health Check:**
-```bash
-curl http://localhost:8000/api/health
+uv --project backend run pytest                 # full suite + coverage
+uv --project backend run pytest --no-cov        # faster
+uv --project backend run pytest tests/api/      # one folder
 ```
 
-**List Repos (requires token):**
-```bash
-curl -H "Authorization: Bearer YOUR_GITHUB_TOKEN" http://localhost:8000/api/repos
-```
+28 tests currently passing (26 from E1 + 2 from E4 logging).
 
-**Start Batch Analysis:**
-```bash
-curl -X POST -H "Authorization: Bearer YOUR_GITHUB_TOKEN" \
-  "http://localhost:8000/api/garden/start?limit=5"
-```
-
-**Check Batch Status:**
-```bash
-curl http://localhost:8000/api/garden/status/garden-abc-123
-```
-
-**Trigger Janitor (README PR):**
-```bash
-curl -X POST -H "Authorization: Bearer YOUR_GITHUB_TOKEN" \
-  http://localhost:8000/api/fix/12345
-```
-
----
-
-## Temporal Workflows & Activities
-
-### Active Workflows
-- `GreetingWorkflow` - Test workflow
-- `AnalysisWorkflow` - Single repo health check
-- `BatchGardeningWorkflow` - Parallel batch analysis
-- `JanitorWorkflow` - README generation + PR creation
-
-### Active Activities
-- `say_hello` - Test activity
-- `analyze_repo_health` - Repo health scoring
-- `fetch_repo_list_activity` - Fetch user repos
-- `get_repo_context_activity` - Get file tree
-- `generate_readme_activity` - LLM README generation
-- `create_pull_request_activity` - Git operations + PR
-
-### Task Queue
-- **Name**: `gardener-queue`
-- **Workers**: 1 (configurable)
-
----
-
-## Frontend Integration Notes
-
-1. **OAuth Flow**: 
-   - Redirect user to GitHub OAuth
-   - Exchange code via `/api/auth/exchange`
-   - Store `access_token` in frontend state
-
-2. **Polling Pattern**:
-   - Start batch: `POST /api/garden/start`
-   - Poll status: `GET /api/garden/status/{workflow_id}` every 1-2 seconds
-   - Stop when `completed === total`
-
-3. **Error Handling**:
-   - `401`: Missing/invalid token
-   - `404`: Repo or workflow not found
-   - `502`: GitHub API failure
-
-4. **CORS**: 
-   - Currently allows all origins (`allow_origins=["*"]`)
-   - Update in production: `app/main.py`
-
----
-
-## Project Structure
+## Code layout (post-E1 / E4)
 
 ```
-backend/
-├── app/
-│   ├── api/
-│   │   └── routes.py          # All API endpoints
-│   ├── core/
-│   │   └── config.py          # Environment settings
-│   ├── schemas/
-│   │   ├── github.py          # Repo, AuthExchangeRequest
-│   │   └── analysis.py        # RepoHealth, BatchStatus
-│   ├── services/
-│   │   ├── github_service.py  # PyGithub wrapper
-│   │   └── llm_service.py     # LiteLLM wrapper
-│   ├── temporal/
-│   │   ├── workflows.py       # Temporal workflows
-│   │   ├── activities.py      # Temporal activities
-│   │   └── worker.py          # Worker configuration
-│   └── main.py                # FastAPI app entry
-├── pyproject.toml             # Dependencies
-└── .env.example               # Environment template
+backend/app/
+├── main.py                  # FastAPI app, structlog config, middleware wiring
+├── api/
+│   ├── deps.py              # shared deps: get_temporal_client, get_current_token
+│   └── routes/              # per-domain routers (see routes/README.md)
+│       ├── __init__.py      # aggregates into api_router
+│       ├── health.py        # GET /health
+│       ├── auth.py          # POST /auth/exchange
+│       ├── repos.py         # /repos, /analyze, /fix, /sync, /commit
+│       ├── garden.py        # /garden/start, /garden/status
+│       ├── portfolio.py     # /portfolio/generate, /portfolio/status, /portfolio/publish
+│       └── logs.py          # POST /log (frontend error ingestion)
+├── core/
+│   └── config.py            # Pydantic Settings — all env vars defined here
+├── db/
+│   ├── models.py            # SQLModel ORM: User, Repository, AnalysisResult
+│   ├── crud.py              # upsert-pattern CRUD functions
+│   └── session.py           # SQLModel engine + session factory
+├── middleware/
+│   └── logging.py           # FastAPI middleware binding request_id + user_id to structlog
+├── schemas/                 # Pydantic request/response models (separate from DB)
+├── services/
+│   ├── github_service.py    # PyGithub wrapper (sync, wrap calls in asyncio.to_thread)
+│   └── llm_service.py       # LiteLLM wrapper for README generation
+└── temporal/
+    ├── activities/          # Temporal activities (see activities/README.md)
+    │   ├── __init__.py      # re-exports for backward compat
+    │   ├── analysis.py
+    │   ├── github.py
+    │   ├── generation.py
+    │   ├── persistence.py
+    │   └── portfolio.py
+    ├── middleware.py        # temporal_activity_context() — binds workflow_id/etc to structlog
+    ├── worker.py            # registers workflows + activities on gardener-queue
+    └── workflows.py         # workflow defs: Analysis, BatchGardening, Janitor, Portfolio
 ```
 
----
+## How to add a new Temporal workflow
 
-## License
+1. **Define activities** in `app/temporal/activities/<domain>.py` (or create a new domain module). Each activity is an `@activity.defn`-decorated async function. Use `temporal_activity_context(...)` at the top of long-running activities to bind context to logs.
+2. **Re-export from `activities/__init__.py`** so existing `from app.temporal.activities import …` callers still work.
+3. **Define the workflow** in `app/temporal/workflows.py` with `@workflow.defn`. Call activities via `workflow.execute_activity(...)` with retry policy + timeouts.
+4. **Register in `worker.py`** in the `workflows=[…]` and `activities=[…]` lists.
+5. **Expose via an API route** in `app/api/routes/<domain>.py`: take a request body, look up the Temporal client via `Depends(get_temporal_client)`, call `client.start_workflow(...)`, return `{"workflow_id": <id>}`.
 
-MIT
+## How to add a new API route
+
+1. Pick the right router file in `app/api/routes/` (or create a new domain `<domain>.py`).
+2. Define an `APIRouter()` at the top, decorate handlers with `@router.<method>(<path>)`.
+3. If creating a new router file, register it in `app/api/routes/__init__.py` so it gets aggregated into `api_router`.
+4. Add a test in `tests/api/test_<domain>.py` covering happy + error paths.
+
+## Logging (E4)
+
+We use `structlog` configured in `main.py`. **Don't use `print()` or `logging.basicConfig` in app code.** To add a log line:
+
+```python
+import structlog
+logger = structlog.get_logger()
+logger.info("event_name", key1="value1", key2=42)
+```
+
+In a Temporal activity, wrap the work in `temporal_activity_context()`
+to bind `workflow_id`/`activity_name`/`repo_id`/`user_id` for all
+nested log calls:
+
+```python
+from app.temporal.middleware import temporal_activity_context
+
+@activity.defn
+async def my_activity(workflow_id: str, repo_id: int) -> str:
+    with temporal_activity_context(workflow_id, "my_activity", repo_id=repo_id):
+        logger.info("activity_start")
+        # ... work ...
+        logger.info("activity_done")
+```
+
+`LOG_FORMAT` env: `json` (default in prod) or `human` (default in dev).
+`LOG_LEVEL` env: `DEBUG` / `INFO` (default) / `WARN` / `ERROR`.
+
+For HTTP requests, `LoggingMiddleware` (registered in `main.py`)
+auto-binds `request_id` (from `X-Request-ID` header or generated UUID)
+and `user_id` for every request. The `request_id` is echoed back in
+the response so users can include it in bug reports.
+
+## Environment variables
+
+Copy `.env.example` to `.env`. Key vars:
+
+- `DATABASE_URL` — Postgres URL (auto-set in docker compose)
+- `TEMPORAL_ADDRESS` — Temporal server (auto-set in docker compose)
+- `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` — GitHub OAuth app creds
+- `LITELLM_API_KEY` / `LITELLM_API_BASE` / `LLM_MODEL` — LLM provider
+- `FRONTEND_URL` — CORS allow-list (comma-separated)
+- `LOG_FORMAT` / `LOG_LEVEL` — see "Logging" above
