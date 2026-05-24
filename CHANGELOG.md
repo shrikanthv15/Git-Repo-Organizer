@@ -7,7 +7,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 ## [Unreleased]
 
 ### Added
-- **Backend activity modules**: Split monolithic `backend/app/temporal/activities.py` (948 LOC) into focused concern-based modules:
+- **Structured logging** (E4, PR #10): backend uses `structlog` with JSON output in prod (toggle via `LOG_FORMAT` env, default `json` in prod / `human` in dev) and `LOG_LEVEL` env. `LoggingMiddleware` binds `request_id` + `user_id` per HTTP request; `temporal_activity_context()` binds `workflow_id`/`activity_name`/`repo_id`/`user_id` per Temporal activity. Frontend gains `app/error.tsx` + `app/global-error.tsx` page-level boundaries and a `lib/logger.ts` wrapper that ships errors to `/api/log`.
+- **Frontend split** (E1b, PR #11): `repo-detail-sheet.tsx` (439 LOC) refactored into `repo-detail-sheet.tsx` (241 — orchestration), `components/dashboard/draft-proposal-editor.tsx` (196 — extracted editor), and `hooks/use-draft-proposal.ts` (75 — editor state). External `RepoDetailSheet` props unchanged.
+- **Backend activity modules** (E1, PR #9): Split monolithic `backend/app/temporal/activities.py` (948 LOC) into focused concern-based modules:
   - `activities/analysis.py` — repo health analysis, codebase activity scanning
   - `activities/github.py` — PR creation, repo fetching, status synchronization
   - `activities/generation.py` — README and documentation generation
@@ -28,8 +30,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - **Route registration**: `app/main.py` now imports `api_router` from `app.api.routes` instead of `router`.
 
 ### Fixed
-- **HTTPException hoisting**: Moved `HTTPException` to module-level imports in `backend/app/api/routes/auth.py` for proper error handling.
-- **Activity signature restoration**: Ensured `getAllTaskNotes(taskIds, perTask)` function signature is correct across refactored modules.
+- **HTTPException hoisting** (E1): Moved `HTTPException` to module-level imports in `backend/app/api/routes/auth.py` for proper error handling.
+- **structlog `merge_contextvars`** (E4): Added missing `structlog.contextvars.merge_contextvars` processor in `backend/app/main.py` — without it, `bind_contextvars()` writes context but the renderer never reads it, so `request_id`/`workflow_id`/etc would never appear in log lines. Whole logging feature was no-op before this fix.
+- **Test discovery** (E4): Moved `test_logging.py` from `backend/tests/` to `tests/` so `pytest.ini`'s `testpaths = tests` actually picks it up.
 
 ## [0.1.0] - 2026-05-23
 

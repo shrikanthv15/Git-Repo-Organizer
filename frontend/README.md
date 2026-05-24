@@ -1,36 +1,101 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# frontend/
 
-## Getting Started
+Next.js 16 App Router + TypeScript + Tailwind + shadcn/ui (Radix) +
+TanStack React Query + framer-motion. Managed via `pnpm`.
 
-First, run the development server:
+## Run frontend alone
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+cd frontend
+pnpm install
+pnpm dev          # http://localhost:3000
+pnpm build        # production build (turbopack)
+pnpm lint         # eslint
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Needs the backend API reachable at `NEXT_PUBLIC_API_BASE_URL`
+(default: `http://localhost:8000`).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Code layout (post-E1b / E4)
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```
+frontend/src/
+├── app/                          # Next.js App Router pages
+│   ├── page.tsx                  # /            (landing)
+│   ├── callback/page.tsx         # /callback    (OAuth callback)
+│   ├── dashboard/page.tsx        # /dashboard   (repo grid)
+│   ├── portfolio/page.tsx        # /portfolio   (portfolio studio)
+│   ├── repo/[repoId]/page.tsx    # /repo/<id>   (per-repo detail)
+│   ├── error.tsx                 # page-level error boundary (E4)
+│   └── global-error.tsx          # root-layout error boundary (E4)
+├── components/
+│   ├── dashboard/
+│   │   ├── repo-detail-sheet.tsx       # main RepoDetailSheet orchestration (post-E1b split)
+│   │   ├── draft-proposal-editor.tsx   # extracted draft editor (E1b)
+│   │   ├── repo-card.tsx               # repo grid card
+│   │   └── …
+│   ├── landing/                  # landing-page sections
+│   └── ui/                       # shadcn/ui primitives (Button, Sheet, ScrollArea, …)
+├── hooks/
+│   ├── use-gardener.ts           # React Query hooks for all API interactions
+│   └── use-draft-proposal.ts     # editor state hook (E1b)
+├── lib/
+│   ├── utils.ts                  # cn() helper for Tailwind class merging
+│   └── logger.ts                 # console.log/error wrapper (E4)
+├── services/
+│   └── api.ts                    # Axios client with auth interceptor
+└── types/
+    └── api.ts                    # TypeScript interfaces matching backend Pydantic
+```
 
-## Learn More
+## How to add a new App Router page
 
-To learn more about Next.js, take a look at the following resources:
+1. Create `app/<route-path>/page.tsx`. Default-export a React component.
+2. If it needs client-side state or interactivity, add `"use client";` at the top — otherwise let it be a server component (RSC).
+3. For dynamic routes: `app/foo/[id]/page.tsx` — the param is in `params.id`.
+4. For auth-gated pages: read the token from localStorage on the client, redirect to `/` if missing. (Server-side auth not yet wired.)
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## How the React Query hook works (`hooks/use-gardener.ts`)
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Pattern: one hook file exports many small hooks. Each hook wraps either
+a query or a mutation:
 
-## Deploy on Vercel
+```ts
+export function useRepos() {
+    return useQuery({
+        queryKey: ["repos"],
+        queryFn: async (): Promise<Repo[]> => {
+            const { data } = await gardenApi.getRepos();
+            return Array.isArray(data) ? data : [];
+        },
+        // Smart polling: only when a repo is actively drafting
+        refetchInterval: (query) => {
+            const repos = query.state.data;
+            return repos?.some((r) => r.health?.status === "drafting_docs") ? 3_000 : false;
+        },
+    });
+}
+```
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+Mutations follow the same pattern; on success they call
+`queryClient.invalidateQueries(["repos"])` to refetch.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+For self-contained editor state (like the draft-proposal flow) we
+extract into focused hooks like `useDraftProposal` — see
+`hooks/use-draft-proposal.ts` for the pattern.
+
+## Logging + error boundaries (E4)
+
+`lib/logger.ts` wraps `console.log/error` with route context. Use it in
+client components for non-error info. For uncaught errors, the App
+Router boundaries (`app/error.tsx`, `app/global-error.tsx`) render a
+nice fallback UI and POST the error to `/api/log` if
+`NEXT_PUBLIC_LOG_ENDPOINT` is set.
+
+## Environment variables
+
+Set via `.env.local` (gitignored) or Vercel/Coolify UI:
+
+- `NEXT_PUBLIC_API_BASE_URL` — backend API URL (default `http://localhost:8000`)
+- `NEXT_PUBLIC_GITHUB_CLIENT_ID` — for the OAuth redirect URL
+- `NEXT_PUBLIC_LOG_ENDPOINT` — optional, where error boundary posts to (default `/api/log`)
