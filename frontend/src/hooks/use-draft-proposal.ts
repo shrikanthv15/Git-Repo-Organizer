@@ -4,10 +4,11 @@ import type { UseMutationResult } from "@tanstack/react-query";
 interface CommitArgs {
     repoId: number;
     selectedFiles: string[];
-    editedContents: Record<string, string>;
+    editedContents?: Record<string, string>;
 }
 
 interface CommitResult {
+    repoId: number;
     prUrl: string;
 }
 
