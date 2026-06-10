@@ -4,6 +4,10 @@ import sys
 
 from temporalio.client import Client
 from temporalio.worker import Worker
+from temporalio.worker.workflow_sandbox import (
+    SandboxedWorkflowRunner,
+    SandboxRestrictions,
+)
 
 # Configure root logger BEFORE anything else — without this,
 # all logger.info/error calls silently go nowhere in Docker.
@@ -65,6 +69,16 @@ async def main():
     worker = Worker(
         client,
         task_queue=TASK_QUEUE,
+        # Temporal's workflow sandbox cannot safely re-import native (single-
+        # phase-init) C/Rust extension modules. The activity import graph pulls
+        # in `cryptography` (via PyGithub/httpx) and `pydantic_core`, whose
+        # re-execution inside the sandbox crashes the importer with
+        # `SystemError: bad argument to internal function`, failing workflow
+        # validation. Pass all third-party modules through to the host importer;
+        # workflow determinism is still enforced on our own workflow code.
+        workflow_runner=SandboxedWorkflowRunner(
+            restrictions=SandboxRestrictions.default.with_passthrough_all_modules()
+        ),
         workflows=[
             GreetingWorkflow,
             AnalysisWorkflow,

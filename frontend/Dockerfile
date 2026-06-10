@@ -1,7 +1,9 @@
 FROM node:20-alpine AS base
 
-# Install pnpm
-RUN corepack enable && corepack prepare pnpm@latest --activate
+# Install pnpm — pin to v10 to match CI (.github/workflows/test.yml) and the
+# pnpm-lock.yaml (lockfileVersion 9.0). pnpm@latest (11.x) requires Node >=22
+# (imports node:sqlite) and breaks on this node:20-alpine base.
+RUN corepack enable && corepack prepare pnpm@10 --activate
 
 # --- Dependencies stage ---
 FROM base AS deps
