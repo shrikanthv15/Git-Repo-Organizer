@@ -20,6 +20,8 @@ interface UseDraftProposalArgs {
     commitDocs: CommitMutation;
 }
 
+import { toast } from '@/hooks/use-toast';
+
 export function useDraftProposal({ repoId, draft, commitDocs }: UseDraftProposalArgs) {
     const filenames = Object.keys(draft);
     const [activeTab, setActiveTab] = useState(filenames[0] ?? "");
@@ -51,9 +53,14 @@ export function useDraftProposal({ repoId, draft, commitDocs }: UseDraftProposal
                 onSuccess: ({ prUrl: url }) => {
                     setCommitted(true);
                     setPrUrl(url);
+                    toast({ title: "Draft saved", description: "Your changes have been committed.", variant: "default" });
+                },
+                onError: (error) => {
+                    toast({ title: "Commit failed", description: error?.message || "An error occurred.", variant: "destructive" });
                 },
             }
         );
+
     };
 
     return {
