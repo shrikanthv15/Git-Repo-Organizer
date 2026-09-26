@@ -20,7 +20,7 @@ services:
 
   # ── Temporal Server ─────────────────────────────
   temporal:
-    image: temporalio/auto-setup:latest
+    image: temporalio/auto-setup:1.29.7
     environment:
       DB: postgres12
       DB_PORT: 5432

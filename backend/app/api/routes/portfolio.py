@@ -55,19 +55,32 @@ async def generate_portfolio(
     links_json = json.dumps(body.links) if body.links else "{}"
 
     client = await get_temporal_client()
-    workflow_id = f"portfolio-{username}-{uuid.uuid4()}"
-    await client.start_workflow(
-        PortfolioWorkflow.run,
-        PortfolioInput(
-            access_token=token,
-            username=username,
-            repo_ids=body.repo_ids,
-            bio=body.bio,
-            links_json=links_json,
-        ),
-        id=workflow_id,
-        task_queue="gardener-queue",
-    )
+    # Deterministic workflow ID for resumability: hash of username and repo IDs
+    import hashlib
+    repo_ids_str = ','.join(map(str, sorted(body.repo_ids)))
+    hash_input = f"{username}:{repo_ids_str}".encode('utf-8')
+    deterministic_hash = hashlib.sha256(hash_input).hexdigest()[:8]
+    workflow_id = f"portfolio-{username}-{deterministic_hash}"
+    # Try to resume an existing workflow with this deterministic ID
+    try:
+        existing_handle = client.get_workflow_handle(workflow_id)
+        # Verify the workflow exists by querying its status
+        _ = await existing_handle.query(PortfolioWorkflow.get_status)
+        return {"workflow_id": workflow_id, "resumed": True}
+    except Exception:
+        # No existing workflow; start a new one
+        await client.start_workflow(
+            PortfolioWorkflow.run,
+            PortfolioInput(
+                access_token=token,
+                username=username,
+                repo_ids=body.repo_ids,
+                bio=body.bio,
+                links_json=links_json,
+            ),
+            id=workflow_id,
+            task_queue="gardener-queue",
+        )
 
     if idem_key:
         with get_session() as session:

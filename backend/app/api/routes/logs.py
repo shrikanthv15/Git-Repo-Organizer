@@ -14,8 +14,9 @@ class FrontendLogRequest(BaseModel):
 
 
 @router.post("/log")
-async def log_frontend_error(body: FrontendLogRequest):
-    """Receive structured logs from frontend error boundaries."""
+async def log_frontend_error(body: FrontendLogRequest, token: str = Depends(get_current_token)):
+    """Receive structured logs from frontend error boundaries. Requires authentication."""
     logger = structlog.get_logger()
     logger.info("frontend_log", level=body.level, message=body.message, route=body.route, digest=body.digest)
     return {"status": "logged"}
+
