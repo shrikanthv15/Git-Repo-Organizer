@@ -1,38 +1,29 @@
-from fastapi import APIRouter, Depends, HTTPException
-from fastapi.security import HTTPBearer
-from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi import APIRouter, HTTPException
 from sqlalchemy import text
 import socket
-from ..core.config import settings
-from ..core import get_db
+from app.core.config import settings
+from app.db.session import get_session
 
 router = APIRouter()
 
-# Simple health check
-def get_http_bearer():
-    return HTTPBearer(auto_error=False)
 
 @router.get("/health")
 async def health_check():
     return {"status": "healthy", "service": "GitHub Gardener"}
 
+
 @router.get("/ready")
-async def readiness_check(db: AsyncSession = Depends(get_db), token: str = Depends(get_http_bearer())):
-    """Readiness probe checks DB and Temporal connectivity."""
-    # Check DB connectivity
+async def readiness_check():
+    """Readiness probe: checks DB and Temporal connectivity. 503 when not ready."""
     try:
-        await db.execute(text("SELECT 1"))
+        with get_session() as session:
+            session.exec(text("SELECT 1")).one()
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Database not ready: {e}")
-    # Check Temporal connectivity (socket)
-    host, port_str = settings.TEMPORAL_ADDRESS.split(":")
-    port = int(port_str)
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.settimeout(1)
+    host, _, port_str = settings.TEMPORAL_ADDRESS.partition(":")
     try:
-        s.connect((host, port))
+        s = socket.create_connection((host, int(port_str)), timeout=2)
+        s.close()
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"Temporal not ready: {e}")
-    finally:
-        s.close()
     return {"status": "ready"}
