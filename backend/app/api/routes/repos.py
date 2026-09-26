@@ -16,6 +16,8 @@ from app.schemas.analysis import RepoHealth
 from app.schemas.github import Repo
 from app.services import github_service
 from app.temporal.activities import create_docs_pull_request_activity
+from sqlmodel import select
+from app.db.models import Repository, AnalysisResult
 from app.temporal.workflows import (
     AnalysisInput,
     AnalysisWorkflow,
@@ -60,8 +62,13 @@ async def list_repos(token: str = Depends(get_current_token)):
     # Hydrate repos with persisted analysis data
     repo_ids = [r.id for r in repos]
     # Retrieve analysis data; surface any backend errors
-    with get_session() as session:
-        analysis_map = get_latest_analysis_for_repos(session, repo_ids)
+    try:
+        with get_session() as session:
+            analysis_map = get_latest_analysis_for_repos(session, repo_ids)
+    except Exception as e:
+        # Surface backend DB errors to the user
+        raise HTTPException(status_code=502, detail=f"Failed to retrieve analysis data: {e}")
+
 
     enriched: list[Repo] = []
     for r in repos:
