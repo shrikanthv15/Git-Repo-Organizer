@@ -160,6 +160,9 @@ class GithubClient:
     def get_user_login(self) -> str:
         return self._call(lambda: self._github.get_user().login)
 
+    def get_user_id(self) -> int:
+        return self._call(lambda: self._github.get_user().id)
+
     def list_user_repos_as_dicts(self) -> list[dict]:
         """Return list of dicts matching the shape ``Repo`` schema expects."""
         def fetch() -> list[dict]:

@@ -6,12 +6,19 @@ from sqlmodel import Field, Relationship, SQLModel, Column, JSON
 
 class User(SQLModel, table=True):
     __tablename__ = "users"
-
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     github_id: int = Field(unique=True, index=True)
     username: str
-
     repositories: list["Repository"] = Relationship(back_populates="owner")
+
+class UserSession(SQLModel, table=True):
+    __tablename__ = "user_sessions"
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    user_id: uuid.UUID = Field(foreign_key="users.id")
+    encrypted_github_token: str = Field(nullable=False)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    expires_at: datetime | None = None
+    revoked_at: datetime | None = None
 
 
 class Repository(SQLModel, table=True):
