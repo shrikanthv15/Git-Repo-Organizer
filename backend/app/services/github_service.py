@@ -79,3 +79,12 @@ def _get_username(access_token: str) -> str:
 async def get_username(access_token: str) -> str:
     """Get the authenticated user's GitHub username."""
     return await asyncio.to_thread(_get_username, access_token)
+
+def _get_user_id(access_token: str) -> int:
+    with GithubClient(access_token) as client:
+        return client.get_user_id()
+
+
+async def get_user_id(access_token: str) -> int:
+    """Get the authenticated user's GitHub numeric id."""
+    return await asyncio.to_thread(_get_user_id, access_token)

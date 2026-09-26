@@ -29,15 +29,10 @@ export const api = axios.create({
     timeout: 30000,
 });
 
-// Request Interceptor: Inject Bearer token
+// Request Interceptor: No token injection – server uses HttpOnly session cookie
 api.interceptors.request.use(
     (config) => {
-        if (typeof window !== "undefined") {
-            const token = localStorage.getItem("access_token");
-            if (token) {
-                config.headers.Authorization = `Bearer ${token}`;
-            }
-        }
+        // No client‑side token; rely on cookie sent automatically by the browser
         return config;
     },
     (error) => Promise.reject(error),
@@ -48,6 +43,7 @@ api.interceptors.response.use(
     (response) => response,
     (error) => {
         if (error.response?.status === 401 && typeof window !== "undefined") {
+            // Clear any stale token (defensive) and redirect to login
             localStorage.removeItem("access_token");
             window.location.href = "/";
         }
