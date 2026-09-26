@@ -5,7 +5,7 @@ from starlette.requests import Request
 
 
 class LoggingMiddleware(BaseHTTPMiddleware):
-    """Bind request_id and user_id to all logs from this request."""
+    """Bind request_id and user_id to all logs from this request, and emit X-Request-ID header."""
 
     async def dispatch(self, request: Request, call_next):
         # Generate or extract request ID
@@ -15,7 +15,6 @@ class LoggingMiddleware(BaseHTTPMiddleware):
         user_id = None
         auth_header = request.headers.get("Authorization", "")
         if auth_header.startswith("Bearer "):
-            # For now, just mark as authenticated; full user lookup can happen in routes
             user_id = "authenticated"
         
         # Bind to structlog context
@@ -24,6 +23,8 @@ class LoggingMiddleware(BaseHTTPMiddleware):
         
         try:
             response = await call_next(request)
+            # Add X-Request-ID header to response
+            response.headers["X-Request-ID"] = request_id
             return response
         finally:
             structlog.contextvars.clear_contextvars()
