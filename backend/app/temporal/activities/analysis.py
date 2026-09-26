@@ -112,6 +112,9 @@ def _analyze_repo(repo_full_name: str, access_token: str) -> dict:
                 pending_fix_url=pending_fix_url,
                 last_gardener_run_at=last_gardener_run_at,
             )
+            # Ensure status is set to idle after analysis completes
+            from app.db.crud import set_repo_status
+            set_repo_status(session, github_repo_id=repo.id, status="idle")
             session.commit()
     except Exception as exc:
         activity.logger.warning("DB persistence failed (non-fatal): %s", exc)

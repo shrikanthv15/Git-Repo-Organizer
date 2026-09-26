@@ -2,6 +2,7 @@ import json
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
+from datetime import timedelta
 from pydantic import BaseModel
 
 from app.db.crud import (
@@ -15,6 +16,8 @@ from app.schemas.analysis import RepoHealth
 from app.schemas.github import Repo
 from app.services import github_service
 from app.temporal.activities import create_docs_pull_request_activity
+from sqlmodel import select
+from app.db.models import Repository, AnalysisResult
 from app.temporal.workflows import (
     AnalysisInput,
     AnalysisWorkflow,
@@ -58,11 +61,14 @@ async def list_repos(token: str = Depends(get_current_token)):
 
     # Hydrate repos with persisted analysis data
     repo_ids = [r.id for r in repos]
+    # Retrieve analysis data; surface any backend errors
     try:
         with get_session() as session:
             analysis_map = get_latest_analysis_for_repos(session, repo_ids)
-    except Exception:
-        analysis_map = {}
+    except Exception as e:
+        # Surface backend DB errors to the user
+        raise HTTPException(status_code=502, detail=f"Failed to retrieve analysis data: {e}")
+
 
     enriched: list[Repo] = []
     for r in repos:
@@ -94,13 +100,17 @@ async def analyze_repo(repo_id: int, token: str = Depends(get_current_token)):
 
     client = await get_temporal_client()
     workflow_id = f"analysis-{repo_id}-{uuid.uuid4()}"
-    await client.start_workflow(
-        AnalysisWorkflow.run,
-        AnalysisInput(repo_full_name=full_name, access_token=token),
-        id=workflow_id,
-        task_queue="gardener-queue",
-    )
-    return {"workflow_id": workflow_id}
+    try:
+        result = await client.execute_workflow(
+            AnalysisWorkflow.run,
+            AnalysisInput(repo_full_name=full_name, access_token=token),
+            id=workflow_id,
+            task_queue="gardener-queue",
+            start_to_close_timeout=timedelta(seconds=30),
+        )
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Analysis failed: {e}")
+    return {"workflow_id": workflow_id, "result": result}
 
 
 @router.post("/fix/{repo_id}")
@@ -127,21 +137,44 @@ async def fix_repo(
         details = await github_service.get_repo_details(token, repo_id)
     except Exception:
         raise HTTPException(status_code=404, detail=f"Repo with id {repo_id} not found")
-
+    full_name = details.get("full_name")
+    if not full_name:
+        raise HTTPException(status_code=400, detail="Repository details missing 'full_name'")
+    # Ensure analysis exists; if not, start it
+    with get_session() as session:
+        repo = session.exec(select(Repository).where(Repository.github_repo_id == repo_id)).first()
+        analysis_exists = False
+        if repo:
+            analysis = session.exec(
+                select(AnalysisResult).where(AnalysisResult.repo_id == repo.id)
+            ).first()
+            analysis_exists = analysis is not None
+        if not analysis_exists:
+            client = await get_temporal_client()
+            analysis_wf_id = f"analysis-{repo_id}-{uuid.uuid4()}"
+            await client.execute_workflow(
+                AnalysisWorkflow.run,
+                AnalysisInput(repo_full_name=full_name, access_token=token),
+                id=analysis_wf_id,
+                task_queue="gardener-queue",
+            )
+    # Now start the Janitor fix workflow and update repo status
     client = await get_temporal_client()
     workflow_id = f"janitor-{repo_id}-{uuid.uuid4()}"
-    await client.start_workflow(
-        JanitorWorkflow.run,
-        JanitorInput(
-            repo_full_name=details["full_name"],
-            access_token=token,
-            description=details["description"],
-            github_repo_id=repo_id,
-        ),
-        id=workflow_id,
-        task_queue="gardener-queue",
-    )
-
+    try:
+        await client.start_workflow(
+            JanitorWorkflow.run,
+            JanitorInput(
+                repo_full_name=full_name,
+                access_token=token,
+                description=details.get("description") or "",
+                github_repo_id=repo_id,
+            ),
+            id=workflow_id,
+            task_queue="gardener-queue",
+        )
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Janitor workflow failed: {e}")
     if idem_key:
         with get_session() as session:
             record_idempotency_key(
@@ -149,7 +182,7 @@ async def fix_repo(
                 endpoint=_FIX_ENDPOINT, workflow_id=workflow_id,
             )
             session.commit()
-
+ 
     return {"workflow_id": workflow_id}
 
 
