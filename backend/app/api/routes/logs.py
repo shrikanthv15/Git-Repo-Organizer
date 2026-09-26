@@ -1,6 +1,8 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 import structlog
+
+from app.api.deps import get_current_token
 
 router = APIRouter()
 
