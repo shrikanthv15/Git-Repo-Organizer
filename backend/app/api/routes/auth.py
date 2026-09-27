@@ -6,6 +6,7 @@ from cryptography.fernet import Fernet
 from sqlmodel import select
 
 from app.services import github_service
+from app.core.config import settings
 from app.db import session as db_session
 from app.db import models as db_models
 from app.db import crud
@@ -15,6 +16,16 @@ router = APIRouter()
 
 class AuthExchangeRequest(BaseModel):
     code: str
+
+
+def _cookie_kwargs() -> dict:
+    """Session cookie flags, env-driven.
+
+    SameSite=None requires Secure or browsers reject the cookie; force it.
+    """
+    samesite = settings.COOKIE_SAMESITE.lower()
+    secure = settings.COOKIE_SECURE or samesite == "none"
+    return {"secure": secure, "samesite": samesite}
 
 
 def _fernet() -> Fernet:
@@ -52,8 +63,7 @@ async def auth_exchange(body: AuthExchangeRequest, response: Response):
             key="session_id",
             value=str(user_session.id),
             httponly=True,
-            secure=False,
-            samesite="lax",
+            **_cookie_kwargs(),
         )
     return {"username": username}
 
@@ -71,5 +81,5 @@ async def auth_signout(request: Request, response: Response):
                 user_session.revoked_at = datetime.now(timezone.utc)
                 sess.add(user_session)
                 sess.commit()
-    response.delete_cookie(key="session_id", samesite="lax")
+    response.delete_cookie(key="session_id", **_cookie_kwargs())
     return {"ok": True}
