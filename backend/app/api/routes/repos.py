@@ -101,16 +101,15 @@ async def analyze_repo(repo_id: int, token: str = Depends(get_current_token)):
     client = await get_temporal_client()
     workflow_id = f"analysis-{repo_id}-{uuid.uuid4()}"
     try:
-        result = await client.execute_workflow(
+        await client.start_workflow(
             AnalysisWorkflow.run,
             AnalysisInput(repo_full_name=full_name, access_token=token),
             id=workflow_id,
             task_queue="gardener-queue",
-            start_to_close_timeout=timedelta(seconds=30),
         )
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Analysis failed: {e}")
-    return {"workflow_id": workflow_id, "result": result}
+        raise HTTPException(status_code=502, detail=f"Analysis failed to start: {e}")
+    return {"workflow_id": workflow_id}
 
 
 @router.post("/fix/{repo_id}")
