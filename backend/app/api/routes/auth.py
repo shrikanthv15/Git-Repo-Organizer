@@ -47,6 +47,7 @@ async def auth_exchange(body: AuthExchangeRequest, response: Response):
         )
         sess.add(user_session)
         sess.flush()
+        sess.commit()
         response.set_cookie(
             key="session_id",
             value=str(user_session.id),
@@ -69,5 +70,6 @@ async def auth_signout(request: Request, response: Response):
             if user_session and user_session.revoked_at is None:
                 user_session.revoked_at = datetime.now(timezone.utc)
                 sess.add(user_session)
+                sess.commit()
     response.delete_cookie(key="session_id", samesite="lax")
     return {"ok": True}
