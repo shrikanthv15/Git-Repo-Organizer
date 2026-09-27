@@ -17,6 +17,10 @@ class Settings(BaseSettings):
     DATABASE_URL: str = "postgresql://gardener:gardener_secret@localhost:5432/gardener"
     TEMPORAL_ADDRESS: str = "localhost:7233"
     FRONTEND_URL: str = ""
+    # Session cookie policy. Public deploy (Vercel frontend -> tunnel API) needs
+    # cross-origin cookies: COOKIE_SAMESITE=none + COOKIE_SECURE=true.
+    COOKIE_SAMESITE: str = "lax"
+    COOKIE_SECURE: bool = False
 
     # E5 guardrails — LLM cost cap
     # Reject a request when (prompt_tokens * input_price + max_output_tokens *
