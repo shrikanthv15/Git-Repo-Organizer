@@ -64,16 +64,55 @@ async def garden_repos(
     return {"workflow_id": workflow_id}
 
 
+@router.post("/garden/start")
+async def garden_start(limit: int = 0, token: str = Depends(get_current_token)):
+    """Start a batch analysis over the user's repos.
+
+    Matches the frontend contract: POST /api/garden/start?limit=N (0 = all).
+    Returns immediately with a workflow_id; poll GET /api/garden/status/{workflow_id}.
+    """
+    effective_limit = min(limit, 50) if limit > 0 else 50  # cap: 50 repos per batch
+    client = await get_temporal_client()
+    workflow_id = f"batch-gardening-{uuid.uuid4()}"
+    await client.start_workflow(
+        BatchGardeningWorkflow.run,
+        BatchGardeningInput(access_token=token, limit=effective_limit),
+        id=workflow_id,
+        task_queue="gardener-queue",
+    )
+    return {"workflow_id": workflow_id}
+
+
 @router.get("/garden/status/{workflow_id}")
 async def garden_status(workflow_id: str, token: str = Depends(get_current_token)):
-    """Poll the batch gardening workflow status."""
+    """Poll a gardening workflow's status — batch or single-repo analysis."""
+    from temporalio.client import WorkflowExecutionStatus
+
     client = await get_temporal_client()
     handle = client.get_workflow_handle(workflow_id)
     try:
-        status = await handle.query(BatchGardeningWorkflow.get_status)
+        desc = await handle.describe()
     except Exception:
         raise HTTPException(
             status_code=404,
-            detail=f"Workflow '{workflow_id}' not found or not queryable",
+            detail=f"Workflow '{workflow_id}' not found",
         )
-    return status
+    if desc.workflow_type == "BatchGardeningWorkflow":
+        try:
+            return await handle.query(BatchGardeningWorkflow.get_status)
+        except Exception:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Workflow '{workflow_id}' not queryable",
+            )
+    # Single-repo AnalysisWorkflow has no query handler — derive status from execution state
+    if desc.status == WorkflowExecutionStatus.COMPLETED:
+        result = await handle.result()
+        return {"total": 1, "completed": 1, "results": [result] if result else []}
+    if desc.status in (
+        WorkflowExecutionStatus.FAILED,
+        WorkflowExecutionStatus.TERMINATED,
+        WorkflowExecutionStatus.CANCELED,
+    ):
+        return {"total": 1, "completed": 1, "results": [], "status": "failed"}
+    return {"total": 1, "completed": 0, "results": [], "status": "running"}
