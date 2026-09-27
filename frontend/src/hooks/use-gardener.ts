@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import { useToast } from "@/hooks/use-toast";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { gardenApi } from "@/services/api";
 import type { Repo, BatchStatus, PortfolioStatus, PortfolioGenerateRequest, PortfolioPublishResponse } from "@/types/api";
@@ -59,8 +60,22 @@ export function useRepo(repoId: number) {
 // -------------------------------------------------------------------
 export function useGardener() {
     const queryClient = useQueryClient();
+    const { toast } = useToast();
     const [currentWorkflowId, setCurrentWorkflowId] = useState<string | null>(null);
     const [isBatchComplete, setIsBatchComplete] = useState(false);
+    const [pollAttempts, setPollAttempts] = useState(0);
+
+    // Surface mutation failures -- buttons must never fail silently again
+    const showError = useCallback(
+        (title: string, err: unknown) => {
+            const detail =
+                (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ||
+                (err instanceof Error ? err.message : null) ||
+                "Unknown error";
+            toast({ title, description: String(detail), variant: "destructive" });
+        },
+        [toast],
+    );
 
     // Track per-repo fix status: repoId -> "pending" | "done"
     const [fixStatus, setFixStatus] = useState<Record<number, "pending" | "done">>({});
@@ -71,10 +86,16 @@ export function useGardener() {
             const { data } = await gardenApi.startBatchAnalysis(limit);
             return data.workflow_id;
         },
-        onSuccess: (workflowId) => {
+        onSuccess: (workflowId, limit) => {
             setCurrentWorkflowId(workflowId);
             setIsBatchComplete(false);
+            setPollAttempts(0);
+            toast({
+                title: "Analysis started",
+                description: "Analyzing " + (limit || "all") + " repositories...",
+            });
         },
+        onError: (err) => showError("Analyze All failed to start", err),
     });
 
     // Polling Query for batch status
@@ -110,6 +131,27 @@ export function useGardener() {
             });
         }
     }, [batchStatus, queryClient]);
+
+    // Safety valve: if batch polling runs ~5 min with no completion, stop and tell the user
+    // instead of leaving the Analyze All button disabled forever.
+    useEffect(() => {
+        if (!batchStatus || !currentWorkflowId || isBatchComplete) return;
+        if (batchStatus.completed === batchStatus.total && batchStatus.total > 0) return;
+        setPollAttempts((a) => a + 1);
+    }, [batchStatus, currentWorkflowId, isBatchComplete]);
+
+    useEffect(() => {
+        if (pollAttempts > 150 && currentWorkflowId && !isBatchComplete) {
+            setIsBatchComplete(true);
+            setCurrentWorkflowId(null);
+            setPollAttempts(0);
+            toast({
+                title: "Analyze All timed out",
+                description: "Still working server-side -- wait a minute and try again.",
+                variant: "destructive",
+            });
+        }
+    }, [pollAttempts, currentWorkflowId, isBatchComplete, toast]);
 
     // Fix Mutation (Janitor) — now polls for draft_proposal instead of pending_fix_url
     const triggerFix = useMutation({
@@ -160,6 +202,7 @@ export function useGardener() {
             });
         },
         onError: (_err, repoId) => {
+            showError("Fix failed", _err);
             setFixStatus((prev) => {
                 const next = { ...prev };
                 delete next[repoId];
@@ -200,6 +243,7 @@ export function useGardener() {
                 });
             });
         },
+        onError: (err) => showError("Commit failed", err),
     });
 
     // Sync Mutation — check GitHub for merged/closed PRs
@@ -211,6 +255,7 @@ export function useGardener() {
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ["repos"] });
         },
+        onError: (err) => showError("Sync failed", err),
     });
 
     // Single Analysis Mutation
@@ -248,6 +293,7 @@ export function useGardener() {
                 });
             });
         },
+        onError: (err) => showError("Analysis failed", err),
     });
 
     const getFixStatus = useCallback(
@@ -271,6 +317,7 @@ export function useGardener() {
 // usePortfolio — Portfolio Studio: generate, poll, publish
 // -------------------------------------------------------------------
 export function usePortfolio() {
+    const { toast } = useToast();
     const [workflowId, setWorkflowId] = useState<string | null>(null);
     const [isComplete, setIsComplete] = useState(false);
     const [publishResult, setPublishResult] = useState<PortfolioPublishResponse | null>(null);
@@ -284,6 +331,10 @@ export function usePortfolio() {
             setWorkflowId(wfId);
             setIsComplete(false);
             setPublishResult(null);
+        },
+        onError: (err) => {
+            const detail = err instanceof Error ? err.message : "Unknown error";
+            toast({ title: "Portfolio generation failed to start", description: detail, variant: "destructive" });
         },
     });
 
@@ -302,8 +353,15 @@ export function usePortfolio() {
         if (!status) return;
         if (status.stage === "draft_ready" || status.stage === "failed") {
             setIsComplete(true);
+            if (status.stage === "failed") {
+                toast({
+                    title: "Portfolio generation failed",
+                    description: "Check the backend logs and try again.",
+                    variant: "destructive",
+                });
+            }
         }
-    }, [status]);
+    }, [status, toast]);
 
     const publish = useMutation({
         mutationFn: async (readmeContent: string) => {
@@ -312,6 +370,10 @@ export function usePortfolio() {
         },
         onSuccess: (result) => {
             setPublishResult(result);
+        },
+        onError: (err) => {
+            const detail = err instanceof Error ? err.message : "Unknown error";
+            toast({ title: "Publish failed", description: detail, variant: "destructive" });
         },
     });
 
