@@ -30,7 +30,9 @@ function CallbackContent() {
         const exchangeCode = async () => {
             try {
                 const { data } = await gardenApi.exchangeAuth(code);
-                localStorage.setItem("access_token", data.access_token);
+                // Auth now rides the HttpOnly session_id cookie; localStorage only
+                // keeps a logged-in marker for the dashboard auth guard.
+                localStorage.setItem("access_token", "cookie-session");
                 router.push("/dashboard");
             } catch (error) {
                 console.error("Auth exchange failed:", error);

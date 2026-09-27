@@ -22,6 +22,9 @@ const getBaseUrl = () => {
 // Axios singleton
 export const api = axios.create({
     baseURL: getBaseUrl(),
+    // Auth is the HttpOnly session_id cookie; the frontend (:3100) and the
+    // API (:8000) are different origins, so the cookie must be sent explicitly.
+    withCredentials: true,
     headers: {
         "Content-Type": "application/json",
         "ngrok-skip-browser-warning": "true",
